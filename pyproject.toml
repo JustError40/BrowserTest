@@ -54,7 +54,19 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["agent", "browser", "config", "tools"]
+include = [
+  "main.py",
+  "agent",
+  "browser",
+  "config",
+  "tools",
+  "memory",
+  "vision",
+  "ui",
+]
+
+[tool.hatch.build]
+ignore-vcs = true
 
 [dependency-groups]
 dev = [
