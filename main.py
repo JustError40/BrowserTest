@@ -115,7 +115,10 @@ async def run_task(
     from config.logging import setup_logging
     setup_logging(settings.log_level)
 
-    # 3. LLM ─────────────────────────────────────────────────────────────────
+    # 3. Register built-in tools (navigate_to, click_element, extract_content, …)
+    import tools.builtin  # noqa: F401  — side-effect: registers actions in registry
+
+    # 4. LLM ─────────────────────────────────────────────────────────────────
     from agent.llm.factory import LLMFactory
     llm = LLMFactory.create_from_settings()
     logger.info("LLM ready", provider=settings.llm_provider, model=settings.llm_model)
@@ -178,7 +181,7 @@ async def run_task(
 @app.command()
 def cli(
     task: str = typer.Argument(default="", help="Task to execute"),
-    headless: bool = typer.Option(True, "--headless/--no-headless", help="Run browser headless"),
+    headless: bool = typer.Option(False, "--headless/--no-headless", help="Run browser headless"),
     max_steps: int = typer.Option(20, "--max-steps", help="Maximum executor steps"),
     vision: bool = typer.Option(False, "--vision", help="Enable screenshot vision"),
 ) -> None:
