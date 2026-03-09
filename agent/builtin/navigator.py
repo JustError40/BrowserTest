@@ -1,0 +1,251 @@
+"""NavigatorAgent: single-step browser-interaction agent driven by an LLM.
+
+The NavigatorAgent receives a natural-language instruction, observes the
+current browser state (DOM + optional screenshot), asks the LLM to choose
+one tool from the ToolRegistry, executes it, and returns a NavigatorResult.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any
+
+import structlog
+from pydantic import BaseModel
+
+from agent.base import BaseAgent
+from agent.views import AgentSettings, StepResult
+from browser.dom import DomService
+from browser.session import BrowserSession
+from tools.registry import registry
+
+logger = structlog.get_logger(__name__)
+
+# Load system prompt templates once at import time
+_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "navigator.md"
+_PROMPT_VISION_PATH = Path(__file__).parent.parent / "prompts" / "navigator_vision.md"
+_SYSTEM_PROMPT: str = _PROMPT_PATH.read_text(encoding="utf-8") if _PROMPT_PATH.exists() else ""
+_SYSTEM_PROMPT_VISION: str = (
+    _PROMPT_VISION_PATH.read_text(encoding="utf-8") if _PROMPT_VISION_PATH.exists() else _SYSTEM_PROMPT
+)
+
+_dom_service = DomService(viewport_expansion=100)
+
+# Schema of all available tools (updated lazily on first use)
+_TOOL_SCHEMA_HINT: str = ""
+
+
+def _get_tool_schema_hint() -> str:
+    global _TOOL_SCHEMA_HINT
+    if not _TOOL_SCHEMA_HINT:
+        schema = registry.get_schema()
+        lines = [f"  - {name}: {meta['description']}" for name, meta in schema.items()]
+        _TOOL_SCHEMA_HINT = "Available tools:\n" + "\n".join(lines)
+    return _TOOL_SCHEMA_HINT
+
+
+# ---------------------------------------------------------------------------
+# Result model
+# ---------------------------------------------------------------------------
+
+
+class NavigatorResult(BaseModel):
+    """Result of a single navigator step."""
+
+    action_taken: str = ""
+    """Name of the tool that was executed."""
+
+    success: bool = True
+    """True if the action was carried out without errors."""
+
+    observation: str = ""
+    """What was observed / extracted after the action."""
+
+    done: bool = False
+    """True when the instruction is considered complete."""
+
+    data: dict[str, Any] = {}
+    """Optional structured data from the action."""
+
+
+# ---------------------------------------------------------------------------
+# Agent implementation
+# ---------------------------------------------------------------------------
+
+
+class NavigatorAgent(BaseAgent):
+    """Browser-interaction agent that executes one tool per step.
+
+    Args:
+        llm:             An instance of BaseLLM (or compatible mock).
+        browser_session: Active BrowserSession to operate on.
+        instruction:     Default instruction for the agent's run() loop.
+        settings:        Optional AgentSettings.
+    """
+
+    def __init__(
+        self,
+        llm,
+        browser_session: BrowserSession,
+        instruction: str = "",
+        settings: AgentSettings | None = None,
+    ) -> None:
+        super().__init__(settings=settings)
+        self.llm = llm
+        self.browser_session = browser_session
+        self.instruction = instruction
+
+    # ------------------------------------------------------------------
+    # BaseAgent interface
+    # ------------------------------------------------------------------
+
+    async def _step(self) -> StepResult:
+        """Execute one step using the stored instruction and session."""
+        result = await self.execute_step(self.instruction, self.browser_session)
+        return StepResult(
+            action=result.action_taken,
+            output=result.observation,
+            done=result.done,
+            success=result.success,
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def execute_step(
+        self,
+        instruction: str,
+        session: BrowserSession,
+    ) -> NavigatorResult:
+        """Observe browser state, ask LLM for a tool, execute it.
+
+        Args:
+            instruction: Natural-language instruction (e.g. "Go to example.com").
+            session:     Active BrowserSession.
+
+        Returns:
+            NavigatorResult with action_taken, success, observation, done.
+        """
+        # 1. Observe current browser state --------------------------------
+        page = session.get_current_page()
+        current_url = page.url
+
+        elements = await _dom_service.get_interactive_elements(page)
+        dom_text = _dom_service.format_for_llm(elements)
+
+        # 2. Optionally capture screenshot --------------------------------
+        screenshot_bytes: bytes | None = None
+        if self.settings.vision_enabled:
+            try:
+                screenshot_bytes = await page.screenshot(type="jpeg", quality=60)
+            except Exception as exc:
+                logger.debug("screenshot failed", error=str(exc))
+
+        # 3. Build LLM prompt ---------------------------------------------
+        user_content = (
+            f"Current URL: {current_url}\n\n"
+            f"{_get_tool_schema_hint()}\n\n"
+            f"DOM interactive elements:\n{dom_text or '(no interactive elements)'}\n\n"
+            f"Instruction: {instruction}\n\n"
+            "Respond with JSON: {\"tool\": \"<name>\", \"params\": {...}}"
+        )
+
+        system_prompt = _SYSTEM_PROMPT_VISION if self.settings.vision_enabled else _SYSTEM_PROMPT
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        images = []
+        if screenshot_bytes:
+            images = [screenshot_bytes]
+
+        # 4. Call LLM with retry ------------------------------------------
+        tool_call: dict[str, Any] | None = None
+        last_error: str = ""
+
+        for attempt in range(1, 4):  # up to 3 retries
+            try:
+                raw = await self.llm.generate(messages, images=images if images else None)
+                tool_call = _parse_tool_call(raw)
+                if tool_call:
+                    break
+                last_error = f"LLM response not parseable: {raw[:200]}"
+            except Exception as exc:
+                last_error = str(exc)
+                logger.warning("LLM call failed", attempt=attempt, error=last_error)
+
+        if not tool_call:
+            logger.warning("navigator: no valid tool call from LLM", error=last_error)
+            return NavigatorResult(
+                success=False,
+                observation=f"Failed to get valid tool choice from LLM: {last_error}",
+            )
+
+        # 5. Execute the chosen tool --------------------------------------
+        tool_name = tool_call.get("tool", "")
+        tool_params = tool_call.get("params", {})
+
+        logger.info(
+            "navigator: executing tool",
+            tool=tool_name,
+            params=str(tool_params)[:80],
+            instruction=instruction[:60],
+        )
+
+        action_result = await registry.execute(tool_name, tool_params, session)
+
+        done_flag = bool(action_result.data.get("done", False)) if action_result.data else False
+
+        logger.info(
+            "navigator: tool result",
+            tool=tool_name,
+            success=action_result.success,
+            done=done_flag,
+        )
+
+        return NavigatorResult(
+            action_taken=tool_name,
+            success=action_result.success,
+            observation=action_result.extracted_content or action_result.error or "",
+            done=done_flag,
+            data=action_result.data or {},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_tool_call(raw: str) -> dict[str, Any] | None:
+    """Extract JSON tool call from raw LLM output.
+
+    Handles:
+    - Plain JSON string
+    - JSON wrapped in a markdown code block (```json ... ```)
+    """
+    if not raw:
+        return None
+
+    # Strip markdown code fences if present
+    cleaned = re.sub(r"```(?:json)?\s*", "", raw).replace("```", "").strip()
+
+    # Try to find the first {...} block
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(0)
+
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, dict) and "tool" in parsed:
+            if "params" not in parsed:
+                parsed["params"] = {}
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    return None
