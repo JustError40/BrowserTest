@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cowork-os = "main:cli"
+cowork-os = "main:run"
 
 [project.optional-dependencies]
 dev = [
