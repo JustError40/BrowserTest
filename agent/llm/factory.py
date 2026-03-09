@@ -8,6 +8,7 @@ _PROVIDERS: dict[str, str] = {
     "openai": "agent.llm.openai.OpenAILLM",
     "anthropic": "agent.llm.anthropic.AnthropicLLM",
     "ollama": "agent.llm.ollama.OllamaLLM",
+    "zai": "agent.llm.zai.ZaiLLM",
 }
 
 
@@ -19,7 +20,7 @@ class LLMFactory:
         provider: str,
         model: str,
         api_key: str = "",
-        timeout: float = 60.0,
+        timeout: float = 120.0,
         **kwargs,
     ) -> BaseLLM:
         """Create and return an LLM instance for the given provider.
@@ -56,3 +57,25 @@ class LLMFactory:
     def list_providers() -> list[str]:
         """Return list of supported provider names."""
         return sorted(_PROVIDERS)
+
+    @staticmethod
+    def create_from_settings() -> BaseLLM:
+        """Create an LLM instance using the application Settings.
+
+        Automatically picks the correct API key for the configured provider.
+        """
+        from config.settings import get_settings
+
+        s = get_settings()
+        _key_map = {
+            "anthropic": s.anthropic_api_key,
+            "openai": s.openai_api_key,
+            "ollama": "",
+            "zai": s.zai_api_key,
+        }
+        api_key = _key_map.get(s.llm_provider, "")
+        return LLMFactory.create(
+            provider=s.llm_provider,
+            model=s.llm_model,
+            api_key=api_key,
+        )

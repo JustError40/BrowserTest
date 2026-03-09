@@ -126,8 +126,15 @@ async def run_task(
     # 4. Browser session ──────────────────────────────────────────────────────
     from browser.profile import BrowserProfile
     from browser.session import BrowserSession
-    profile = BrowserProfile(headless=headless)
-    browser = BrowserSession(profile=profile)
+    cdp_url = settings.browser_cdp_url.strip()
+    if cdp_url:
+        # Attach to an existing Chrome/Edge running on the host
+        logger.info("Launching browser", profile="cdp", cdp_url=cdp_url)
+        browser = BrowserSession(cdp_url=cdp_url)
+    else:
+        profile = BrowserProfile(headless=headless)
+        logger.info("Launching browser", profile=profile.name)
+        browser = BrowserSession(profile=profile)
     _browser_ref = browser
 
     # 5. Agent context ────────────────────────────────────────────────────────

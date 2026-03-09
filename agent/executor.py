@@ -1,0 +1,207 @@
+"""Executor — orchestrates the Planner → Navigator → [replan] loop."""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import structlog
+
+from agent.builtin.navigator import NavigatorResult
+from agent.builtin.planner import PlannerAgent, PlannerOutput
+from agent.context import AgentContext
+from agent.event import Actors, EventType
+
+logger = structlog.get_logger(__name__)
+
+
+class ExecutorResult:
+    """Result returned by :meth:`Executor.run`."""
+
+    def __init__(
+        self,
+        success: bool,
+        output: str = "",
+        steps: int = 0,
+        events_log: list[dict[str, Any]] | None = None,
+        error: str = "",
+    ) -> None:
+        self.success = success
+        self.output = output
+        self.steps = steps
+        self.events_log: list[dict[str, Any]] = events_log or []
+        self.error = error
+
+    def __repr__(self) -> str:
+        return (
+            f"ExecutorResult(success={self.success}, steps={self.steps},"
+            f" error={self.error!r})"
+        )
+
+
+class Executor:
+    """Orchestrates the full Planner → Navigator → Planner (replan) loop.
+
+    Parameters
+    ----------
+    planner:
+        A :class:`~agent.builtin.planner.PlannerAgent` instance.
+    navigator:
+        Any object with an ``execute_step(instruction, session)`` async method
+        that returns a :class:`~agent.builtin.navigator.NavigatorResult`.
+    """
+
+    def __init__(self, planner: PlannerAgent, navigator: Any) -> None:
+        self._planner = planner
+        self._navigator = navigator
+        self._stopped = False
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def stop(self) -> None:
+        """Request a graceful stop after the current step finishes."""
+        self._stopped = True
+        logger.info("executor.stop_requested")
+
+    async def run(self, task: str, context: AgentContext) -> ExecutorResult:
+        """Run the full task loop until done, max_steps, or stop().
+
+        Args:
+            task:    Top-level task description.
+            context: Shared :class:`~agent.context.AgentContext`.
+
+        Returns:
+            :class:`ExecutorResult` summarising the run.
+        """
+        self._stopped = False
+        events_log: list[dict[str, Any]] = []
+        max_steps = context.settings.max_steps
+        steps = 0
+        last_output = ""
+        # Accumulated navigator observations (instruction → result text)
+        step_results: list[str] = []
+        # Full (untruncated) observation from the most recent step — passed to planner separately
+        last_obs_full: str = ""
+
+        async def emit(event_type: EventType, actor: Actors, **data: Any) -> None:
+            events_log.append({"event": event_type.value, "actor": actor.value, **data})
+            await context.event_manager.emit(event_type, actor, data or None)
+
+        await emit(EventType.TASK_START, Actors.EXECUTOR, task=task)
+
+        # ── Initial plan ──────────────────────────────────────────────────────
+        plan: PlannerOutput = await self._planner.plan(task)
+        logger.info("executor.plan_ready", steps=len(plan.next_steps))
+
+        while not self._stopped:
+            if plan.done:
+                last_output = plan.final_answer or plan.observation
+                await emit(EventType.TASK_COMPLETE, Actors.PLANNER, output=last_output)
+                return ExecutorResult(
+                    success=True,
+                    output=last_output,
+                    steps=steps,
+                    events_log=events_log,
+                )
+
+            if steps >= max_steps:
+                logger.warning("executor.max_steps", steps=steps)
+                await emit(EventType.TASK_ERROR, Actors.EXECUTOR, error="max steps")
+                return ExecutorResult(
+                    success=False,
+                    output=last_output,
+                    steps=steps,
+                    events_log=events_log,
+                    error="max steps",
+                )
+
+            # ── Execute each step from the plan ───────────────────────────────
+            nav_result: NavigatorResult | None = None
+            for instruction in plan.next_steps:
+                if self._stopped:
+                    break
+                if steps >= max_steps:
+                    break
+
+                await emit(EventType.STEP_START, Actors.NAVIGATOR, step=steps, instruction=instruction)
+                try:
+                    nav_result = await self._navigator.execute_step(
+                        instruction, context.browser_session
+                    )
+                    steps += 1
+                    last_output = nav_result.observation or ""
+                    last_obs_full = nav_result.observation or ""
+                    # Track every step result for planner context (cap individual obs at 4000 chars)
+                    obs = (nav_result.observation or "(no output)")[:4000]
+                    step_results.append(
+                        f"Step {steps} [{instruction[:80]}]: {obs}"
+                    )
+
+                    if nav_result.success:
+                        await emit(EventType.STEP_END, Actors.NAVIGATOR, step=steps)
+                    else:
+                        await emit(
+                            EventType.STEP_FAIL,
+                            Actors.NAVIGATOR,
+                            step=steps,
+                            error=nav_result.observation,
+                        )
+
+                    if nav_result.done:
+                        await emit(EventType.TASK_COMPLETE, Actors.NAVIGATOR, output=last_output)
+                        return ExecutorResult(
+                            success=True,
+                            output=last_output,
+                            steps=steps,
+                            events_log=events_log,
+                        )
+                except Exception as exc:
+                    steps += 1
+                    error_msg = str(exc)
+                    logger.exception("executor.step_error", step=steps, error=error_msg)
+                    await emit(EventType.STEP_FAIL, Actors.NAVIGATOR, step=steps, error=error_msg)
+                    nav_result = NavigatorResult(
+                        action_taken="error",
+                        success=False,
+                        observation=error_msg,
+                        done=False,
+                    )
+                    break  # replan after error
+
+            if self._stopped:
+                return ExecutorResult(
+                    success=False,
+                    output=last_output,
+                    steps=steps,
+                    events_log=events_log,
+                    error="stopped",
+                )
+
+            # ── Replan if last step failed ─────────────────────────────────────
+            # Small pause to avoid ZAI rate-limit stacking after navigator calls
+            await asyncio.sleep(1.0)
+
+            if nav_result is not None and not nav_result.success:
+                plan = await self._planner.replan(
+                    error=nav_result.observation or "unknown error",
+                    step_results=step_results,
+                    last_obs_full=last_obs_full,
+                )
+                logger.info("executor.replanned", done=plan.done)
+            else:
+                # All steps succeeded; give planner the full last observation + all step results
+                plan = await self._planner.replan(
+                    error="",
+                    step_results=step_results,
+                    last_obs_full=last_obs_full,
+                )
+                logger.info("executor.check_done", done=plan.done)
+
+        # Stopped externally
+        return ExecutorResult(
+            success=False,
+            output=last_output,
+            steps=steps,
+            events_log=events_log,
+            error="stopped",
+        )

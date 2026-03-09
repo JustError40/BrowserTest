@@ -38,6 +38,12 @@ Set `done: true` and populate `final_answer` when:
 - The task is impossible (page does not exist, login required, etc.).
 - You have already replanned 3 times without progress.
 
+When the prompt includes a **"Completed steps and their results"** section,
+you MUST evaluate those results before planning new steps:
+- If the results already satisfy the user's goal → set `done: true`,
+  copy the key information into `final_answer`.
+- If more steps are needed → set `done: false`, list only the **remaining** steps.
+
 ---
 
 ## Step Writing Rules
@@ -47,9 +53,38 @@ Each entry in `next_steps` must:
 2. Be **atomic** — exactly ONE browser action.
 3. Be **specific** — include URLs, text content, or element descriptions.
 4. Be **unambiguous** — no vague words like "find" or "maybe".
+5. **For extraction steps**: always end with the navigator tool name in parentheses.
 
-Bad: `"Search for the item"`
+Bad:  `"Search for the item"`
 Good: `"Type 'blue sneakers size 10' into the search input field"`
+
+Bad:  `"Extract the FAQ questions and answers"`
+Good: `"Read the full text of the FAQ page (use read_page_text)"`
+
+Bad:  `"Find the price"`
+Good: `"Search the page for 'price' keyword (use search_page_text)"`
+
+---
+
+## Navigator Tool Reference (for writing good step descriptions)
+
+The Navigator has these tools available — write step descriptions that map clearly to one:
+
+| Goal                                | Step description pattern                                                  |
+|-------------------------------------|---------------------------------------------------------------------------|
+| Open a URL                          | `"Navigate to https://..."`                                               |
+| Click a button/link                 | `"Click the '[label]' button/link"`                                       |
+| Type in a field                     | `"Type '[text]' into the search/input field"`                             |
+| Press keyboard key                  | `"Press Enter / Tab / Escape (use send_keys)"`                            |
+| Check what page opened              | `"Check current page URL and title (use get_page_state)"`                 |
+| Read full page text                 | `"Read the full text of the page (use read_page_text)"`                   |
+| Extract by CSS                      | `"Extract text from the [heading/title/paragraph] (use extract_content with selector='h1')"`|
+| Search for a word/phrase on page    | `"Search the page for '[text]' (use search_page_text)"`                   |
+| List all links / headings           | `"Find all links on the page (use find_elements_by_selector with selector='a')"`|
+| Go back                             | `"Navigate back to the previous page (use go_back)"`                      |
+
+**KEY RULE**: When the task involves reading text, articles, or content from a page,
+ALWAYS include a dedicated `read_page_text` step AFTER navigation.
 
 ---
 
@@ -74,31 +109,74 @@ When replanning due to an error:
 
 ---
 
-## Example
+## Examples
+
+### Example 1 — Extract page titles
 
 **Task:** `"Go to news.ycombinator.com and extract the title of the first story."`
 
 **Response:**
 ```json
 {
-  "reasoning": "Open Hacker News and read the first story title. Public page, no login needed.",
+  "reasoning": "Open HN, then use read_page_text to get the full page and find the first story.",
   "observation": "Task starts fresh. No prior steps taken.",
   "next_steps": [
     "Navigate to https://news.ycombinator.com",
-    "Extract the text of the first item in the story list"
+    "Read the full page text to find the first story title (use read_page_text)"
   ],
   "done": false,
   "final_answer": null
 }
 ```
 
-**Completion (after Navigator reports extraction):**
+---
+
+### Example 2 — FAQ extraction (multi-step pattern)
+
+**Task:** `"Open https://example.com and find the FAQ section, then list all questions and answers."`
+
+**Response:**
 ```json
 {
-  "reasoning": "Title was extracted successfully by the Navigator.",
-  "observation": "Title: 'Show HN: I built a new thing'.",
-  "next_steps": [],
-  "done": true,
-  "final_answer": "The first Hacker News story is: 'Show HN: I built a new thing'."
+  "reasoning": "Need to open example.com, locate FAQ link, click it, then read the full FAQ page.",
+  "observation": "Task starts fresh.",
+  "next_steps": [
+    "Navigate to https://example.com",
+    "Click the 'FAQ' link in the navigation or footer",
+    "Read the full text of the FAQ page (use read_page_text)"
+  ],
+  "done": false,
+  "final_answer": null
 }
 ```
+
+---
+
+### Example 3 — Completion check (step results provided)
+
+User message:
+```
+Task: Open example.com FAQ and list questions and answers.
+
+Completed steps and their results:
+  - Step 1 [Navigate to https://example.com]: Navigated. URL: https://example.com | Title: Example
+  - Step 2 [Click the 'FAQ' link]: Clicked element 3 (FAQ). URL: https://example.com/faq | Title: FAQ
+  - Step 3 [Read the full text of the FAQ page using read_page_text]: URL: https://example.com/faq
+    Title: FAQ — Example
+    Q: How do I sign up? A: Click Register button...
+    Q: Is it free? A: Yes, the basic plan is free...
+
+Review the completed steps and their results above.
+```
+
+**Response:**
+```json
+{
+  "reasoning": "All three steps succeeded. The FAQ content has been extracted in step 3.",
+  "observation": "FAQ page content fully extracted.",
+  "next_steps": [],
+  "done": true,
+  "final_answer": "FAQ questions and answers from example.com/faq:\n\nQ: How do I sign up?\nA: Click Register button...\n\nQ: Is it free?\nA: Yes, the basic plan is free..."
+}
+```
+

@@ -30,7 +30,7 @@ def _is_rate_limit(exc: Exception) -> bool:
 class BaseLLM(ABC):
     """Abstract base class for all LLM providers."""
 
-    def __init__(self, model: str, api_key: str = "", timeout: float = 60.0) -> None:
+    def __init__(self, model: str, api_key: str = "", timeout: float = 120.0) -> None:
         self.model = model
         self.api_key = api_key
         self.timeout = timeout

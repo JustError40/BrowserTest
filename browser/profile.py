@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import platform
+import sys
 from pathlib import Path
 
 import structlog
@@ -44,6 +46,34 @@ _CHROME_DOCKER_ARGS: list[str] = [
 def _is_docker() -> bool:
     """Detect if running inside a Docker container."""
     return Path("/.dockerenv").exists() or os.environ.get("DOCKER_CONTAINER") == "1"
+
+
+def _is_windows() -> bool:
+    """Detect if running on Windows (native or under Wine)."""
+    return sys.platform == "win32" or platform.system() == "Windows"
+
+
+def _find_chrome_executable() -> str | None:
+    """Try to locate the Chrome executable on the current OS.
+
+    Returns the path as a string if found, or None to let Playwright use its
+    bundled Chromium.
+    """
+    if _is_windows():
+        candidates = [
+            Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
+            / r"Google\Chrome\Application\chrome.exe",
+            Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
+            / r"Google\Chrome\Application\chrome.exe",
+            Path(os.environ.get("LOCALAPPDATA", ""))
+            / r"Google\Chrome\Application\chrome.exe",
+            Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
+            / r"Microsoft\Edge\Application\msedge.exe",
+        ]
+        for path in candidates:
+            if path.exists():
+                return str(path)
+    return None  # fall back to Playwright's bundled Chromium
 
 
 # ─── BrowserProfile ────────────────────────────────────────────────────────────
@@ -90,7 +120,9 @@ class BrowserProfile(BaseModel):
         if self.headless:
             args.extend(_CHROME_HEADLESS_ARGS)
 
-        if _is_docker():
+        if _is_docker() and not _is_windows():
+            # --no-sandbox is required in Docker/Linux containers but must not be
+            # passed on Windows where sandboxing works differently.
             args.extend(_CHROME_DOCKER_ARGS)
 
         args.extend(self.extra_args)
@@ -102,6 +134,11 @@ class BrowserProfile(BaseModel):
         }
         if self.proxy:
             result["proxy"] = {"server": self.proxy}
+
+        # On Windows, point Playwright at the real Chrome install when found
+        exe = _find_chrome_executable()
+        if exe:
+            result["executable_path"] = exe
 
         return result
 

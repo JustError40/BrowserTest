@@ -31,20 +31,26 @@ _SYSTEM_PROMPT_VISION: str = (
     _PROMPT_VISION_PATH.read_text(encoding="utf-8") if _PROMPT_VISION_PATH.exists() else _SYSTEM_PROMPT
 )
 
-_dom_service = DomService(viewport_expansion=100)
-
-# Schema of all available tools (updated lazily on first use)
-_TOOL_SCHEMA_HINT: str = ""
+_dom_service = DomService(viewport_expansion=500)
 
 
 def _get_tool_schema_hint() -> str:
-    global _TOOL_SCHEMA_HINT
-    if not _TOOL_SCHEMA_HINT:
-        schema = registry.get_schema()
-        lines = [f"  - {name}: {meta['description']}" for name, meta in schema.items()]
-        _TOOL_SCHEMA_HINT = "Available tools:\n" + "\n".join(lines)
-    return _TOOL_SCHEMA_HINT
-
+    """Build a concise tool listing with param signatures for the LLM prompt."""
+    schema = registry.get_schema()
+    lines: list[str] = []
+    for name, meta in schema.items():
+        params_info: dict = meta.get("parameters", {})
+        props: dict = params_info.get("properties", {})
+        required: list = params_info.get("required", [])
+        param_strs: list[str] = []
+        for pname, pinfo in props.items():
+            ptype = pinfo.get("type", "any")
+            is_req = pname in required
+            flag = "" if is_req else "?"
+            param_strs.append(f"{pname}{flag}: {ptype}")
+        params_hint = ", ".join(param_strs) if param_strs else "no params"
+        lines.append(f"  - {name}({params_hint}): {meta['description']}")
+    return "Available tools:\n" + "\n".join(lines)
 
 # ---------------------------------------------------------------------------
 # Result model

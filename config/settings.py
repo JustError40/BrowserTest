@@ -20,17 +20,20 @@ class Settings(BaseSettings):
     )
 
     # ─── LLM Provider ─────────────────────────────────────────────────────────
-    llm_provider: Literal["anthropic", "openai", "ollama"] = "anthropic"
+    llm_provider: Literal["anthropic", "openai", "ollama", "zai"] = "anthropic"
     llm_model: str = "claude-haiku-4-5-20251001"
 
     # ─── API Keys ─────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    zai_api_key: str = ""
 
     # ─── Browser Settings ─────────────────────────────────────────────────────
     browser_headless: bool = True
-    browser_profile_dir: str = "./profiles"
-
+    browser_profile_dir: str = "./profiles"    # CDP URL to attach to an existing running Chrome/Edge instead of launching a new one.
+    # How to use: start Chrome with --remote-debugging-port=9222, then set:
+    #   BROWSER_CDP_URL=http://localhost:9222
+    browser_cdp_url: str = ""
     # ─── Agent Settings ───────────────────────────────────────────────────────
     max_steps: int = 50
     token_budget: int = 100_000
@@ -50,7 +53,7 @@ class Settings(BaseSettings):
 
     # ─── Validation ───────────────────────────────────────────────────────────
 
-    @field_validator("anthropic_api_key", "openai_api_key", mode="before")
+    @field_validator("anthropic_api_key", "openai_api_key", "zai_api_key", mode="before")
     @classmethod
     def _strip_key(cls, v: str) -> str:
         return (v or "").strip()
@@ -66,6 +69,11 @@ class Settings(BaseSettings):
         if self.llm_provider == "openai" and not self.openai_api_key:
             raise ValueError(
                 "OPENAI_API_KEY is required when LLM_PROVIDER=openai. "
+                "Set it in .env or as an environment variable."
+            )
+        if self.llm_provider == "zai" and not self.zai_api_key:
+            raise ValueError(
+                "ZAI_API_KEY is required when LLM_PROVIDER=zai. "
                 "Set it in .env or as an environment variable."
             )
         return self
