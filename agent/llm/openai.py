@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from cowork_os.agent.llm.base import BaseLLM, Message
+from agent.llm.base import BaseLLM, Message
 
 logger = logging.getLogger(__name__)
 

@@ -2,12 +2,6 @@
 
 Browser Automation Platform — multi-agent OS for web tasks.
 
-## Overview
-
-coworkOS is a browser automation platform that combines the best patterns from:
-- **browser-use** — Python, CDP-based, event-driven
-- **nanobrowser** — Multi-agent Planner/Navigator pattern
-- **skyvern** — Enterprise Playwright workflow engine
 
 ## Quick Start
 

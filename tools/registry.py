@@ -10,10 +10,10 @@ from typing import TYPE_CHECKING, Any
 import structlog
 from pydantic import BaseModel, create_model
 
-from cowork_os.tools.views import ActionResult, RegisteredAction
+from tools.views import ActionResult, RegisteredAction
 
 if TYPE_CHECKING:
-    from cowork_os.browser.session import BrowserSession
+    from browser.session import BrowserSession
 
 logger = structlog.get_logger(__name__)
 

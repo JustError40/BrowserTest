@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from playwright.async_api import Page
 
-from cowork_os.browser.dom_views import BoundingBox, DOMElement
+from browser.dom_views import BoundingBox, DOMElement
 
 if TYPE_CHECKING:
     pass

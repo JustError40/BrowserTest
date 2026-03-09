@@ -65,7 +65,7 @@ class BrowserProfile(BaseModel):
     def _get_profile_dir(self) -> Path:
         """Resolve user_data_dir for this profile from Settings."""
         try:
-            from cowork_os.config.settings import get_settings
+            from config.settings import get_settings
 
             base = Path(get_settings().browser_profile_dir)
         except Exception:
@@ -127,7 +127,7 @@ class ProfileManager:
     def __init__(self, base_dir: str | Path | None = None) -> None:
         if base_dir is None:
             try:
-                from cowork_os.config.settings import get_settings
+                from config.settings import get_settings
 
                 base_dir = Path(get_settings().browser_profile_dir)
             except Exception:

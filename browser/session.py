@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Self
 import structlog
 from pydantic import BaseModel, Field
 
-from cowork_os.browser.profile import BrowserProfile
-from cowork_os.browser.watchdogs import WatchdogManager
+from browser.profile import BrowserProfile
+from browser.watchdogs import WatchdogManager
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, BrowserContext, Page, Playwright

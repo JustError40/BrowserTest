@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from cowork_os.agent.llm.base import BaseLLM
+from agent.llm.base import BaseLLM
 
 _PROVIDERS: dict[str, str] = {
-    "openai": "cowork_os.agent.llm.openai.OpenAILLM",
-    "anthropic": "cowork_os.agent.llm.anthropic.AnthropicLLM",
-    "ollama": "cowork_os.agent.llm.ollama.OllamaLLM",
+    "openai": "agent.llm.openai.OpenAILLM",
+    "anthropic": "agent.llm.anthropic.AnthropicLLM",
+    "ollama": "agent.llm.ollama.OllamaLLM",
 }
 
 

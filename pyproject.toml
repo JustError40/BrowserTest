@@ -27,7 +27,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cowork-os = "cowork_os.main:cli"
+cowork-os = "main:cli"
 
 [project.optional-dependencies]
 dev = [
@@ -54,7 +54,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["cowork_os"]
+packages = ["agent", "browser", "config", "tools"]
 
 [dependency-groups]
 dev = [

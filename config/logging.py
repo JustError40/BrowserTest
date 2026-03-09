@@ -60,7 +60,7 @@ def setup_logging(log_level: str | None = None) -> None:
     # Resolve level
     if log_level is None:
         try:
-            from cowork_os.config.settings import get_settings
+            from config.settings import get_settings
 
             log_level = get_settings().log_level
         except Exception:
