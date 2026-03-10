@@ -166,6 +166,7 @@ The Navigator has these tools available — write step descriptions that map cle
 | **Hover to reveal menu**            | `"Hover over the '[Item]' nav element to reveal the sub-menu (use hover)"`               |
 | **Upload file**                     | `"Upload '/path/to/file.pdf' to the file input field (use upload_file)"`                 |
 | **Reload page**                     | `"Reload the page to refresh content (use reload_page)"`                                 |
+| **Open collapsed header nav**       | `"Open header navigation (menu/avatar/account trigger) (use open_navigation_menu)"`      |
 | **Search and submit**               | `"Search for '[query]' in the search field (use search_and_submit with query='[query]')"` |
 | **Provide summary report**          | `"Report completed task: state what was done, items affected, what remains (use done with message)"` |
 | **Verify action effect**            | `"Check current page to confirm [action] took effect (use get_page_state)"` |
@@ -379,7 +380,7 @@ Review the completed steps and their results above.
   "next_steps": [
     "Navigate to https://hh.ru",
     "Check current page URL and title (use get_page_state)",
-    "If profile/resume links are not visible, click the header navigation trigger (hamburger/menu or avatar/profile icon) to open account navigation",
+    "If profile/resume links are not visible, open header account navigation (use open_navigation_menu)",
     "Find and click the link to the resume / 'Моё резюме' section in the profile (look for profile avatar or 'Резюме' nav link)",
     "Read the full text of the resume page (use read_page_text) — note skills, experience, position title",
     "Navigate back to the main hh.ru page (use go_back or navigate to https://hh.ru)",

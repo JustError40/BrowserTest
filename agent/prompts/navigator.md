@@ -48,6 +48,7 @@ No explanation, no markdown, no text before or after the JSON.
 | `check_checkbox`           | Check or uncheck a checkbox / radio button                           | `index`, `is_checked` (bool)                                                             |
 | `upload_file`              | Upload a local file to a `<input type=file>` element                 | `index`, `file_path` (absolute path to local file)                                       |
 | `reload_page`              | Reload / refresh the current page (like F5)                          | *(no params)*                                                                            |
+| `open_navigation_menu`     | Open collapsed header navigation (menu/avatar/profile trigger)       | *(no params)*                                                                            |
 | `search_and_submit`        | Fill a search/query field AND press Enter in one atomic step          | `index`, `query` (search text)                                                           |
 
 ---
@@ -77,10 +78,7 @@ No explanation, no markdown, no text before or after the JSON.
 18. **reload_page** — use when the page appears stuck, or after a file upload to see the updated state.
 19. **If already on the correct URL** and the instruction says "navigate there" — call `get_page_state` or `extract_content` first, do NOT call `done` without verifying content.
 20. **search_and_submit** — use INSTEAD of `input_text` + `send_keys('Enter')` when doing a search on any site (hh.ru, Google, LinkedIn, etc.). It fills the field AND presses Enter atomically, so autocomplete dropdowns and DOM re-renders don't break the flow. `{"index": N, "query": "search text"}`.
-21. **Collapsed navigation (hamburger or profile trigger)** — if instruction needs profile/resume/account links but they are not visible in current DOM list, first click a navigation trigger in header:
-   - menu toggle (`☰`, `≡`, three horizontal lines, `Меню`)
-   - avatar/profile/account trigger (round user image/icon, initials badge, `Профиль`, `Аккаунт`, `Кабинет`)
-   After opening, re-check page state and continue.
+21. **Collapsed navigation (hamburger or profile trigger)** — if instruction needs profile/resume/account links but they are not visible in current DOM list, call `open_navigation_menu` first (do not guess random header index). After opening, re-check page state and continue.
 22. **Generalization rule** — for unseen websites/workflows, follow the same neutral policy:
    verify state (`get_page_state`) → reveal structure (`scroll_page` / `find_elements_by_selector`) → act (`click/input/select/...`) → verify effect (`get_page_state`/`read_page_text`).
    Never invent site-specific shortcuts without evidence in DOM/screenshot.
@@ -92,7 +90,7 @@ No explanation, no markdown, no text before or after the JSON.
 If the instruction is a **page exploration** step (e.g. "Explore the page", "Find all panels", "Open all sections and summarize"), follow this exact sequence:
 
 **Step 0 — Open collapsed navigation if present:**
-→ If screenshot/DOM suggests mobile header with a menu icon OR avatar/profile trigger and key links are missing, use `click_element` on that trigger first.
+→ If screenshot/DOM suggests mobile header with a menu icon OR avatar/profile trigger and key links are missing, use `open_navigation_menu` first.
 → Then use `get_page_state` or `find_elements_by_selector` to discover newly visible nav links.
 
 **Step A — Discover the page layout:**

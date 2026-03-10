@@ -73,6 +73,7 @@ page, prefer scrolling or waiting before selecting.
 | `check_checkbox`           | Check or uncheck a checkbox / radio button                           | `index`, `is_checked` (bool)                                                             |
 | `upload_file`              | Upload a local file to a `<input type=file>` element                 | `index`, `file_path` (absolute path to local file)                                       |
 | `reload_page`              | Reload / refresh the current page (like F5)                          | *(no params)*                                                                            |
+| `open_navigation_menu`     | Open collapsed header navigation (menu/avatar/profile trigger)       | *(no params)*                                                                            |
 | `search_and_submit`        | Fill a search/query field AND press Enter in one atomic step          | `index`, `query` (search text)                                                           |
 
 ---
@@ -121,7 +122,7 @@ Before choosing a tool, analyse the screenshot to:
     `get_page_state` or `extract_content` to confirm, not `done`.
 20. **search_and_submit** — use INSTEAD of `input_text` + `send_keys('Enter')` for any search action. Fills and submits atomically; survives autocomplete dropdown DOM mutations. Amber badge marks the search input. `{"index": N, "query": "search text"}`.
 21. **click_element failures** — if a button appears to do nothing (no URL change, no visible state change), it may be intercepted by pointer-events overlay. `click_element` will retry with JS `el.click()` and `dispatch_event` automatically — just retry once before escalating.
-22. **Mobile/collapsed nav** — when profile/resume/account links are expected but not visible, look for header navigation triggers and click one first, then re-scan links:
+22. **Mobile/collapsed nav** — when profile/resume/account links are expected but not visible, call `open_navigation_menu` first, then re-scan links:
    - hamburger/menu icon (three horizontal lines, `☰`, `≡`, menu button)
    - avatar/profile trigger (round user image/icon, initials badge, person silhouette, account button)
 23. **Generalized visual workflow** — when uncertain on any unfamiliar page:
@@ -205,7 +206,7 @@ When the instruction is a **page exploration** step (e.g. "Explore the page", "F
 → Look at the screenshot for hamburger menu icon, avatar/profile trigger, tab bars, accordions, sidebars. Note the badge numbers of any discovered interactive section headers.
 → Use `find_elements_by_selector` with `selector="[role=tab],[aria-expanded],[details],[summary],[data-toggle]"` to enumerate panel elements.
 
-If hamburger or avatar/profile trigger exists and key links are missing, click it before panel discovery.
+If hamburger or avatar/profile trigger exists and key links are missing, call `open_navigation_menu` before panel discovery.
 
 **Step B — Open each section:**
 → For each discovered panel/tab badge: `click_element` with its index.

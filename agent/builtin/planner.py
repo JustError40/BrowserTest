@@ -143,9 +143,11 @@ class PlannerAgent(BaseAgent):
             New PlannerOutput with an alternative plan, or done=True if the
             task is complete / irrecoverably failed.
         """
-        self._replan_count += 1
+        has_error = bool((error or "").strip())
+        if has_error:
+            self._replan_count += 1
 
-        if self._replan_count > _MAX_REPLANS:
+        if has_error and self._replan_count > _MAX_REPLANS:
             msg = (
                 f"Task could not be completed after {_MAX_REPLANS} replan "
                 f"attempts. Last error: {error}"
@@ -173,7 +175,7 @@ class PlannerAgent(BaseAgent):
         logger.info(
             "planner.replan",
             replan_count=self._replan_count,
-            error=error[:60],
+            error=(error or "")[:60],
             steps=len(output.next_steps),
         )
         return output

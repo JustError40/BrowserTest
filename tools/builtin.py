@@ -6,7 +6,7 @@ Import this module to register all standard browser actions:
     search_page_text, find_elements_by_selector,
     get_page_state, done, wait,
     select_option, hover, check_checkbox, upload_file, reload_page,
-    search_and_submit
+    open_navigation_menu, search_and_submit
 """
 
 import asyncio
@@ -960,7 +960,73 @@ async def reload_page(browser_session: BrowserSession) -> ActionResult:
 
 
 # ---------------------------------------------------------------------------
-# 19. search_and_submit
+# 19. open_navigation_menu
+# ---------------------------------------------------------------------------
+
+
+@registry.action(
+    description=(
+        "Open collapsed/header navigation menu in one robust step. "
+        "Use when profile/resume/account links are hidden. "
+        "Tries common header triggers: hamburger icon, menu button, avatar/profile/account controls."
+    )
+)
+async def open_navigation_menu(browser_session: BrowserSession) -> ActionResult:
+    """Open header navigation via robust selector fallbacks.
+
+    This avoids brittle global DOM index guessing for responsive headers.
+    """
+    try:
+        page = browser_session.get_current_page()
+        selectors = [
+            # Hamburger/menu toggles
+            'header button[aria-label*="menu" i]',
+            'header [role="button"][aria-label*="menu" i]',
+            'header button[title*="menu" i]',
+            'header button[class*="menu" i]',
+            # Profile/account/avatar triggers
+            'header button[aria-label*="profile" i]',
+            'header button[aria-label*="account" i]',
+            'header button[aria-label*="кабинет" i]',
+            'header button[aria-label*="профил" i]',
+            'header [role="button"][aria-label*="profile" i]',
+            'header [role="button"][aria-label*="account" i]',
+            'header img[alt*="profile" i]',
+            'header img[alt*="avatar" i]',
+            # Generic icon buttons in header (last resort)
+            'header button',
+        ]
+
+        for sel in selectors:
+            locator = page.locator(sel)
+            count = await locator.count()
+            if count == 0:
+                continue
+
+            max_scan = min(count, 8)
+            for i in range(max_scan):
+                item = locator.nth(i)
+                try:
+                    if not await item.is_visible():
+                        continue
+                    await item.scroll_into_view_if_needed(timeout=2_000)
+                    await item.click(timeout=4_000)
+                    await asyncio.sleep(0.5)
+                    summary = await _page_summary(page)
+                    return ActionResult.ok(content=f"Opened header navigation via selector '{sel}' (candidate {i}). {summary}")
+                except Exception:
+                    continue
+
+        return ActionResult.fail(
+            error="Could not open header navigation: no clickable menu/profile trigger found in header selectors."
+        )
+    except Exception as exc:
+        logger.warning("open_navigation_menu failed", error=str(exc))
+        return ActionResult.fail(error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 20. search_and_submit
 # ---------------------------------------------------------------------------
 
 

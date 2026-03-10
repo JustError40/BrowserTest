@@ -54,6 +54,33 @@ def _get_tool_schema_hint() -> str:
         lines.append(f"  - {name}({params_hint}): {meta['description']}")
     return "Available tools:\n" + "\n".join(lines)
 
+
+def _instruction_requires_nav_menu(instruction: str) -> bool:
+    """Detect instructions that should use robust header-navigation opening.
+
+    Mirrors atlas-style deterministic grounding for fragile UI affordances
+    (hamburger/avatar/account menu triggers).
+    """
+    text = instruction.lower()
+    trigger_words = [
+        "menu",
+        "hamburger",
+        "avatar",
+        "profile",
+        "account",
+        "resume",
+        "навигац",
+        "меню",
+        "аватар",
+        "профил",
+        "аккаунт",
+        "резюм",
+        "кабинет",
+        "шапк",
+    ]
+    action_words = ["open", "click", "reveal", "show", "find", "открой", "нажми", "покажи"]
+    return any(w in text for w in trigger_words) and any(a in text for a in action_words)
+
 # ---------------------------------------------------------------------------
 # Result model
 # ---------------------------------------------------------------------------
@@ -220,6 +247,21 @@ class NavigatorAgent(BaseAgent):
         # 5. Execute the chosen tool --------------------------------------
         tool_name = tool_call.get("tool", "")
         tool_params = tool_call.get("params", {})
+
+        # Deterministic UI-grounding override: for header/profile menu tasks,
+        # prefer robust selector-based helper over brittle index clicks.
+        if _instruction_requires_nav_menu(instruction) and tool_name in {
+            "click_element",
+            "find_elements_by_selector",
+            "scroll_page",
+        }:
+            logger.info(
+                "navigator: override tool to open_navigation_menu",
+                original_tool=tool_name,
+                instruction=instruction[:80],
+            )
+            tool_name = "open_navigation_menu"
+            tool_params = {}
 
         logger.info(
             "navigator: executing tool",
