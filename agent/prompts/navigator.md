@@ -28,7 +28,7 @@ No explanation, no markdown, no text before or after the JSON.
 | `navigate_to`              | Go to a URL                                                          | `url` (full https://)                                                                    |
 | `go_back`                  | Return to the previous page (undo last navigation)                   | *(no params)*                                                                            |
 | `click_element`            | Click a DOM element                                                  | `index` (integer)                                                                        |
-| `input_text`               | Type text into an input/textarea                                     | `index`, `text`                                                                          |
+| `input_text`               | Type text into an input/textarea (React-safe: uses fill() + native event dispatch) | `index`, `text`                                                                          |
 | `send_keys`                | Press keyboard keys / shortcuts                                      | `keys` e.g. `"Enter"`, `"Tab"`, `"Escape"`, `"Control+Enter"`, `"ArrowDown"`            |
 | `scroll_page`              | Scroll the page                                                      | `direction` (`"up"`/`"down"`), `amount` (pixels, default 600)                            |
 | `get_page_state`           | Get current URL, title, first 1500 chars of text                     | *(no params)*                                                                            |
@@ -38,6 +38,11 @@ No explanation, no markdown, no text before or after the JSON.
 | `find_elements_by_selector`| Find all DOM elements matching a CSS selector, return tag+text+attrs | `selector` (CSS), `attributes?` (list e.g. `["href","class"]`), `max_results?` (int)    |
 | `wait`                     | Pause execution                                                      | `seconds` (integer, default 2)                                                           |
 | `done`                     | Mark this instruction complete with a result                         | `message?` (summary string), `success?` (bool, default true)                            |
+| `select_option`            | Select a `<select>` dropdown option by text, value, or position      | `index`, `label?` (visible text), `value?` (option value attr), `option_index?` (int)   |
+| `hover`                    | Hover mouse over element to reveal hidden menus / tooltips           | `index`, `hold_seconds?` (float, default 0)                                              |
+| `check_checkbox`           | Check or uncheck a checkbox / radio button                           | `index`, `is_checked` (bool)                                                             |
+| `upload_file`              | Upload a local file to a `<input type=file>` element                 | `index`, `file_path` (absolute path to local file)                                       |
+| `reload_page`              | Reload / refresh the current page (like F5)                          | *(no params)*                                                                            |
 
 ---
 
@@ -46,22 +51,72 @@ No explanation, no markdown, no text before or after the JSON.
 1. **navigate_to** — use when the instruction mentions a URL or "go to".
 2. **go_back** — use when the wrong page was opened or when returning to a previous state.
 3. **click_element** — use the index from the DOM list below. Prefer exact label match.
-4. **input_text** — click the field first to focus it, then use `input_text`.
+4. **input_text** — use directly on an input field without clicking first. `input_text` focuses the element itself. Do NOT call `click_element` before `input_text`.
 5. **send_keys** — use for `Enter` (submit), `Tab` (move focus), `Escape` (close), `ArrowDown/Up` (list navigation).
 6. **get_page_state** — use RIGHT AFTER `click_element` or `navigate_to` to confirm what page opened. Also use when unsure of current page.
 7. **read_page_text** — use when the task requires reading long content (articles, FAQ pages, product descriptions).
 8. **extract_content** — use for targeted extractions: `{"selector": "h1"}` for headings, `{"selector": "title"}` for page title.
 9. **search_page_text** — use to check if specific text exists on page, or to locate a section without scrolling. `{"pattern": "FAQ"}` or `{"pattern": "price"}`.
 10. **find_elements_by_selector** — use to list all matching elements: `{"selector": "a"}` returns all links, `{"selector": "h2"}` all subheadings.
+    - **For panel/tab discovery**: `{"selector": "[role=tab],[aria-expanded],[details],[summary],[data-toggle]"}` finds collapsible elements.
 11. **done** — use ONLY after you have obtained the result the instruction requires.
     **Never call `done` as a substitute for extracting or navigating.**
     Set `message` to the actual result/answer, e.g. `{"message": "The title is: Example Domain"}`.
 12. **wait** — only if a page is still loading or an instruction explicitly says "wait".
-13. **If already on the correct URL** and the instruction says "navigate there" — call `get_page_state` or `extract_content` first, do NOT call `done` without verifying content.
+13. **scroll_page** — ALWAYS scroll before declaring content missing. Use `direction="down", amount=1500`.
+14. **select_option** — use when the DOM element is a `<select>` and the instruction says "choose", "select", or "pick" an option. Prefer `label` over `value` over `option_index`.
+15. **hover** — use when the instruction says "hover" or when a dropdown menu is revealed by mouse-over. After hover, call `get_page_state` or `find_elements_by_selector` to see newly revealed elements.
+16. **check_checkbox** — use for a checkbox or radio button. More reliable than `click_element` because it validates the checked state. Pass `is_checked: true` to check, `false` to uncheck.
+17. **upload_file** — use only when the element is `<input type=file>` and `file_path` is known.
+18. **reload_page** — use when the page appears stuck, or after a file upload to see the updated state.
+19. **If already on the correct URL** and the instruction says "navigate there" — call `get_page_state` or `extract_content` first, do NOT call `done` without verifying content.
 
 ---
 
-## MANDATORY Tool Override Rules
+## Page Exploration (when the instruction asks to "explore", "survey", or "open all panels")
+
+If the instruction is a **page exploration** step (e.g. "Explore the page", "Find all panels", "Open all sections and summarize"), follow this exact sequence:
+
+**Step A — Discover the page layout:**
+→ Use `find_elements_by_selector` with `selector="[role=tab],[aria-expanded],[details],[summary],[data-toggle],[data-accordion]"` to find collapsible/tab elements.
+
+**Step B — If tab/panel elements found:**
+→ For each visible tab/panel-header in the DOM list: use `click_element` with its index to open it, then use `read_page_text` to capture its contents.
+
+**Step C — If no collapsible elements found:**
+→ Use `scroll_page` `direction="down"` `amount=1500` to reveal hidden sections, then `read_page_text` to capture all visible text.
+
+**Step D — Summarize:**
+→ Call `done` with `message` = panel-by-panel summary of what each section contains.
+
+**Exploration priority order (use the FIRST applicable tool per step):**
+1. Verify you are on the right page (`get_page_state`).
+2. Scroll to reveal full page content (`scroll_page`).
+3. Find accordion/tab selectors (`find_elements_by_selector`).
+4. Click each discovered interactive section header (`click_element`).
+5. Read content after opening each section (`read_page_text`).
+6. Summarize findings (`done` with descriptive `message`).
+
+---
+
+## Search Bar & React Input Pattern
+
+When the task is to type into a **search bar** (role=searchbox, role=combobox, placeholder contains "search" / "поиск" / "профессия"):
+
+1. Use `input_text` with the element's `index` directly — **no need to click first**.
+2. After `input_text`, call `send_keys` with `keys="Enter"` to submit (or click the search button).
+3. If `input_text` says success but the field appears empty: try `click_element` on the input index, then `input_text` again.
+4. Do NOT use `extract_content` or `read_page_text` before typing — that wastes a step.
+
+Example for hh.ru / any job board:
+```json
+// Step 1: type into search
+{"tool": "input_text", "params": {"index": 4, "text": "Python developer"}}
+// Step 2: submit
+{"tool": "send_keys", "params": {"keys": "Enter"}}
+```
+
+---
 
 These rules override all selection rules above:
 
@@ -143,4 +198,45 @@ Do NOT use `search_page_text` or `extract_content` as a substitute for clicking.
 **Correct response:**
 ```json
 {"tool": "extract_content", "params": {"selector": "h1"}}
+```
+
+---
+
+**Instruction:** `"Find all tab and accordion elements on the page to discover available panels"`
+
+**DOM elements:**
+```
+[1] link: Home
+[2] link: About
+[3] button[role=tab]: Overview
+[4] button[role=tab]: Features
+[5] button[role=tab]: Pricing
+[6] input[text]: Search...
+```
+
+**Correct response (Step A — discover panels):**
+```json
+{"tool": "find_elements_by_selector", "params": {"selector": "[role=tab],[aria-expanded],[details],[summary]", "attributes": ["aria-expanded", "aria-selected", "data-panel"]}}
+```
+
+---
+
+**Instruction:** `"Open the 'Features' tab and read its content"`
+
+**DOM elements:**
+```
+[3] button[role=tab]: Overview
+[4] button[role=tab]: Features
+[5] button[role=tab]: Pricing
+```
+
+**Step 1 — open the tab:**
+```json
+{"tool": "click_element", "params": {"index": 4}}
+```
+*(Navigator is called again after click)*
+
+**Step 2 — read opened tab content:**
+```json
+{"tool": "read_page_text", "params": {}}
 ```

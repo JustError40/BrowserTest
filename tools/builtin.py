@@ -4,11 +4,13 @@ Import this module to register all standard browser actions:
     navigate_to, go_back, click_element, input_text, send_keys,
     scroll_page, extract_content, read_page_text,
     search_page_text, find_elements_by_selector,
-    get_page_state, done, wait
+    get_page_state, done, wait,
+    select_option, hover, check_checkbox, upload_file, reload_page
 """
 
 import asyncio
 import json
+import os
 from typing import Literal
 
 import structlog
@@ -111,8 +113,26 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
             target = elements[index - 1]
 
         if target is None:
-            return ActionResult.fail(error=f"Element index {index} not found. Page has {len(elements)} interactive elements.")
+            return ActionResult.fail(
+                error=f"Element index {index} not found. Page has {len(elements)} interactive elements."
+            )
 
+        elem_label = (target.text or "")[:60]
+
+        # Strategy 1: XPath locator — handles scroll-into-view, overlays, shadow DOM
+        if target.xpath:
+            try:
+                locator = page.locator(f"xpath={target.xpath}")
+                await locator.scroll_into_view_if_needed(timeout=5_000)
+                await locator.click(timeout=8_000)
+                await asyncio.sleep(0.4)
+                summary = await _page_summary(page)
+                logger.debug("click_element via locator", index=index, text=elem_label)
+                return ActionResult.ok(content=f"Clicked element {index} ({elem_label}). {summary}")
+            except Exception:
+                pass  # fall through to coordinate click
+
+        # Strategy 2: coordinate click
         bb = target.bounding_box
         if bb:
             x = bb.x + bb.width / 2
@@ -124,11 +144,9 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
                 index,
             )
 
-        # Brief wait for page to possibly change
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.4)
         summary = await _page_summary(page)
-        elem_label = (target.text or "")[:60]
-        logger.debug("clicked element", index=index, text=elem_label)
+        logger.debug("click_element via coords", index=index, text=elem_label)
         return ActionResult.ok(content=f"Clicked element {index} ({elem_label}). {summary}")
     except Exception as exc:
         logger.warning("click_element failed", index=index, error=str(exc))
@@ -144,11 +162,17 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
     description=(
         "Type text into a numbered input field on the page. "
         "Clears the field first, then types. "
-        "Use `index` from the DOM elements list."
+        "Use `index` from the DOM elements list. "
+        "Works with React / SPA controlled inputs (hh.ru, etc.)."
     )
 )
 async def input_text(index: int, text: str, browser_session: BrowserSession) -> ActionResult:
-    """Clear and type text into the element at the given index."""
+    """Clear and type text into the element at the given index.
+
+    Strategy priority (most reliable first):
+    1. XPath locator + locator.fill() — fires correct synthetic events for React/Vue/Angular.
+    2. Coordinate click + triple-click-select-all + keyboard.type() — plain HTML fallback.
+    """
     try:
         page = browser_session.get_current_page()
         elements = await _dom_service.get_interactive_elements(page)
@@ -162,15 +186,62 @@ async def input_text(index: int, text: str, browser_session: BrowserSession) -> 
         if target is None:
             return ActionResult.fail(error=f"Element index {index} not found.")
 
+        # ── Strategy 1: XPath locator.fill() ────────────────────────────────
+        # Playwright fill() dispatches focus→input→change events that React expects.
+        if target.xpath:
+            try:
+                locator = page.locator(f"xpath={target.xpath}")
+                await locator.scroll_into_view_if_needed(timeout=5_000)
+                await locator.click(timeout=5_000)   # focus first
+                await asyncio.sleep(0.15)
+                await locator.fill(text, timeout=8_000)
+                logger.debug("input_text via fill", index=index, text=text[:40])
+                return ActionResult.ok(content=f"Typed '{text}' into element {index}")
+            except Exception as fill_exc:
+                logger.debug("locator.fill failed, trying fallback", error=str(fill_exc))
+
+        # ── Strategy 2: coordinate click + triple-click + keyboard.type() ───
         bb = target.bounding_box
         if bb:
             x = bb.x + bb.width / 2
             y = bb.y + bb.height / 2
             await page.mouse.click(x, y)
+            await asyncio.sleep(0.2)
+            # Triple-click selects all text in the field (works even if Ctrl+A doesn't)
+            await page.mouse.click(x, y, click_count=3)
+            await asyncio.sleep(0.1)
+        else:
+            # No bounding box — try JS focus fallback
+            if target.xpath:
+                await page.evaluate(
+                    "(xp) => { const el = document.evaluate(xp, document, null, "
+                    "XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; "
+                    "if(el){ el.focus(); el.select && el.select(); } }",
+                    target.xpath,
+                )
 
-        await page.keyboard.press("Control+a")
-        await page.keyboard.type(text)
-        logger.debug("input_text", index=index, text=text[:40])
+        # Dispatch native input event so React/Vue picks up the value
+        if target.xpath:
+            await page.evaluate(
+                """([xp, val]) => {
+                    const el = document.evaluate(xp, document, null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    if (!el) return;
+                    const nativeSetter = Object.getOwnPropertyDescriptor(
+                        window.HTMLInputElement.prototype, 'value')?.set
+                        || Object.getOwnPropertyDescriptor(
+                            window.HTMLTextAreaElement.prototype, 'value')?.set;
+                    if (nativeSetter) nativeSetter.call(el, val);
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }""",
+                [target.xpath, text],
+            )
+            logger.debug("input_text via native-setter dispatch", index=index, text=text[:40])
+            return ActionResult.ok(content=f"Typed '{text}' into element {index}")
+
+        await page.keyboard.type(text, delay=30)
+        logger.debug("input_text via keyboard.type", index=index, text=text[:40])
         return ActionResult.ok(content=f"Typed '{text}' into element {index}")
     except Exception as exc:
         logger.warning("input_text failed", index=index, error=str(exc))
@@ -572,4 +643,274 @@ async def wait(
     await asyncio.sleep(secs)
     logger.debug("waited", seconds=secs)
     return ActionResult.ok(content=f"Waited {secs} seconds")
+
+
+# ---------------------------------------------------------------------------
+# Helpers shared by the new Skyvern-inspired actions
+# ---------------------------------------------------------------------------
+
+
+async def _get_element_locator(index: int, page, elements):
+    """Return a Playwright Locator for the element at *index*.
+
+    Tries the element's stored XPath first.  Returns (locator_or_None, elem).
+    Caller must handle `locator is None` by falling back to coordinate action.
+    Raises ValueError if the index is out of range.
+    """
+    target = None
+    if 0 <= index < len(elements):
+        target = elements[index]
+    elif 1 <= index <= len(elements):
+        target = elements[index - 1]
+
+    if target is None:
+        raise ValueError(f"Element index {index} not found. Page has {len(elements)} interactive elements.")
+
+    locator = page.locator(f"xpath={target.xpath}") if target.xpath else None
+    return locator, target
+
+
+# ---------------------------------------------------------------------------
+# 14. select_option  (borrowed from Skyvern SelectOptionAction)
+# ---------------------------------------------------------------------------
+
+
+@registry.action(
+    description=(
+        "Select an option from a <select> dropdown element. "
+        "Use `index` from the DOM elements list to identify the <select>. "
+        "Provide at least one of: `label` (visible text), `value` (option value attr), "
+        "or `option_index` (0-based position in the dropdown). "
+        "Skyvern pattern: tries label → value → index → partial label match."
+    )
+)
+async def select_option(
+    index: int,
+    browser_session: BrowserSession,
+    label: str = "",
+    value: str = "",
+    option_index: int = -1,
+) -> ActionResult:
+    """Select a dropdown option by label, value, or index (Skyvern SelectOptionAction pattern)."""
+    try:
+        page = browser_session.get_current_page()
+        elements = await _dom_service.get_interactive_elements(page)
+        locator, target = await _get_element_locator(index, page, elements)
+
+        if locator is None:
+            return ActionResult.fail(error=f"Cannot build locator for element {index} (no XPath).")
+
+        await locator.scroll_into_view_if_needed(timeout=5_000)
+
+        chosen: str | None = None
+
+        # --- Try label first, then value, then index (mirrors Skyvern priority) ---
+        if label:
+            try:
+                await locator.select_option(label=label, timeout=8_000)
+                chosen = f"label='{label}'"
+            except Exception:
+                pass
+
+        if chosen is None and value:
+            try:
+                await locator.select_option(value=value, timeout=8_000)
+                chosen = f"value='{value}'"
+            except Exception:
+                pass
+
+        if chosen is None and option_index >= 0:
+            try:
+                await locator.select_option(index=option_index, timeout=8_000)
+                chosen = f"index={option_index}"
+            except Exception:
+                pass
+
+        if chosen is None and label:
+            # Partial / case-insensitive fallback: evaluate JS to find best match
+            matched: str | None = await page.evaluate(
+                """([xpath, lbl]) => {
+                    var sel = document.evaluate(xpath, document, null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                    if (!sel) return null;
+                    var opts = Array.from(sel.options);
+                    var lo = lbl.toLowerCase();
+                    var opt = opts.find(o => o.text.toLowerCase().includes(lo));
+                    if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change', {bubbles:true})); return opt.text; }
+                    return null;
+                }""",
+                [target.xpath, label],
+            )
+            if matched:
+                chosen = f"partial match='{matched}'"
+
+        if chosen is None:
+            return ActionResult.fail(
+                error=f"Could not select option on element {index}. "
+                      f"label={label!r} value={value!r} option_index={option_index}"
+            )
+
+        logger.debug("select_option", index=index, chosen=chosen)
+        return ActionResult.ok(content=f"Selected {chosen} on element {index}")
+    except Exception as exc:
+        logger.warning("select_option failed", index=index, error=str(exc))
+        return ActionResult.fail(error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 15. hover  (borrowed from Skyvern HoverAction)
+# ---------------------------------------------------------------------------
+
+
+@registry.action(
+    description=(
+        "Hover the mouse over a numbered element without clicking. "
+        "Use to reveal dropdown menus, tooltips, or hidden buttons that only "
+        "appear on mouse-over. After hovering, use get_page_state or "
+        "find_elements_by_selector to discover newly revealed elements. "
+        "`index`: element index from the DOM list. "
+        "`hold_seconds`: how long to hold the hover (default 0 = brief hover)."
+    )
+)
+async def hover(
+    index: int,
+    browser_session: BrowserSession,
+    hold_seconds: float = 0.0,
+) -> ActionResult:
+    """Hover over the element at `index` (Skyvern HoverAction pattern)."""
+    try:
+        page = browser_session.get_current_page()
+        elements = await _dom_service.get_interactive_elements(page)
+        locator, target = await _get_element_locator(index, page, elements)
+
+        if locator is not None:
+            await locator.scroll_into_view_if_needed(timeout=5_000)
+            await locator.hover(timeout=8_000)
+        elif target.bounding_box:
+            bb = target.bounding_box
+            await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2)
+        else:
+            return ActionResult.fail(error=f"Cannot hover element {index}: no locator or bounding box.")
+
+        if hold_seconds > 0:
+            await asyncio.sleep(hold_seconds)
+
+        elem_label = (target.text or "")[:60]
+        logger.debug("hover", index=index, text=elem_label)
+        return ActionResult.ok(content=f"Hovered over element {index} ({elem_label})")
+    except Exception as exc:
+        logger.warning("hover failed", index=index, error=str(exc))
+        return ActionResult.fail(error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 16. check_checkbox  (borrowed from Skyvern CheckboxAction)
+# ---------------------------------------------------------------------------
+
+
+@registry.action(
+    description=(
+        "Check or uncheck a checkbox or radio button element. "
+        "`index`: element index from the DOM list. "
+        "`is_checked`: true to check, false to uncheck. "
+        "More reliable than click_element for checkbox state because it uses "
+        "Playwright's native check/uncheck which validates the element type."
+    )
+)
+async def check_checkbox(
+    index: int,
+    is_checked: bool,
+    browser_session: BrowserSession,
+) -> ActionResult:
+    """Check or uncheck a checkbox element (Skyvern CheckboxAction pattern)."""
+    try:
+        page = browser_session.get_current_page()
+        elements = await _dom_service.get_interactive_elements(page)
+        locator, target = await _get_element_locator(index, page, elements)
+
+        if locator is None:
+            return ActionResult.fail(error=f"Cannot build locator for element {index} (no XPath).")
+
+        await locator.scroll_into_view_if_needed(timeout=5_000)
+
+        if is_checked:
+            await locator.check(timeout=8_000)
+            state = "checked"
+        else:
+            await locator.uncheck(timeout=8_000)
+            state = "unchecked"
+
+        elem_label = (target.text or "")[:60]
+        logger.debug("check_checkbox", index=index, is_checked=is_checked)
+        return ActionResult.ok(content=f"Element {index} ({elem_label}) is now {state}")
+    except Exception as exc:
+        logger.warning("check_checkbox failed", index=index, error=str(exc))
+        return ActionResult.fail(error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 17. upload_file  (borrowed from Skyvern UploadFileAction)
+# ---------------------------------------------------------------------------
+
+
+@registry.action(
+    description=(
+        "Upload a local file to a file-input element (<input type='file'>). "
+        "`index`: element index of the file input from the DOM list. "
+        "`file_path`: absolute path to the file on the local filesystem. "
+        "Use when a form has a file upload button or drop zone."
+    )
+)
+async def upload_file(
+    index: int,
+    file_path: str,
+    browser_session: BrowserSession,
+) -> ActionResult:
+    """Upload a file to the file input at `index` (Skyvern UploadFileAction pattern)."""
+    try:
+        if not os.path.exists(file_path):
+            return ActionResult.fail(error=f"File not found: {file_path}")
+
+        page = browser_session.get_current_page()
+        elements = await _dom_service.get_interactive_elements(page)
+        locator, target = await _get_element_locator(index, page, elements)
+
+        if locator is None:
+            return ActionResult.fail(error=f"Cannot build locator for element {index} (no XPath).")
+
+        await locator.scroll_into_view_if_needed(timeout=5_000)
+        await locator.set_input_files(file_path, timeout=10_000)
+
+        fname = os.path.basename(file_path)
+        logger.debug("upload_file", index=index, file=fname)
+        return ActionResult.ok(content=f"Uploaded '{fname}' to element {index}")
+    except Exception as exc:
+        logger.warning("upload_file failed", index=index, file_path=file_path, error=str(exc))
+        return ActionResult.fail(error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 18. reload_page  (borrowed from Skyvern ReloadPageAction)
+# ---------------------------------------------------------------------------
+
+
+@registry.action(
+    description=(
+        "Reload / refresh the current page. "
+        "Use when: the page is stuck, content failed to load, "
+        "a session expired, or after completing an upload to see updated state. "
+        "Equivalent to pressing F5 in the browser."
+    )
+)
+async def reload_page(browser_session: BrowserSession) -> ActionResult:
+    """Reload the current page (Skyvern ReloadPageAction pattern)."""
+    try:
+        page = browser_session.get_current_page()
+        await page.reload(wait_until="domcontentloaded", timeout=30_000)
+        summary = await _page_summary(page)
+        logger.debug("reload_page", summary=summary)
+        return ActionResult.ok(content=f"Page reloaded. {summary}")
+    except Exception as exc:
+        logger.warning("reload_page failed", error=str(exc))
+        return ActionResult.fail(error=str(exc))
 
