@@ -5,7 +5,8 @@ Import this module to register all standard browser actions:
     scroll_page, extract_content, read_page_text,
     search_page_text, find_elements_by_selector,
     get_page_state, done, wait,
-    select_option, hover, check_checkbox, upload_file, reload_page
+    select_option, hover, check_checkbox, upload_file, reload_page,
+    search_and_submit
 """
 
 import asyncio
@@ -130,23 +131,66 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
                 logger.debug("click_element via locator", index=index, text=elem_label)
                 return ActionResult.ok(content=f"Clicked element {index} ({elem_label}). {summary}")
             except Exception:
-                pass  # fall through to coordinate click
+                pass  # fall through
 
-        # Strategy 2: coordinate click
+        # Strategy 2: coordinate mouse click
         bb = target.bounding_box
         if bb:
-            x = bb.x + bb.width / 2
-            y = bb.y + bb.height / 2
-            await page.mouse.click(x, y)
-        else:
-            await page.evaluate(
-                "(idx) => { document.querySelectorAll('a,button,input,select,textarea')[idx]?.click(); }",
-                index,
-            )
+            try:
+                x = bb.x + bb.width / 2
+                y = bb.y + bb.height / 2
+                await page.mouse.click(x, y)
+                await asyncio.sleep(0.4)
+                summary = await _page_summary(page)
+                logger.debug("click_element via coords", index=index, text=elem_label)
+                return ActionResult.ok(content=f"Clicked element {index} ({elem_label}). {summary}")
+            except Exception:
+                pass  # fall through
 
+        # Strategy 3: JS element.click() — bypasses Playwright pointer-events
+        # interception layer, works on React portals and detached overlays.
+        # Modelled after browser-use's final JS fallback.
+        if target.xpath:
+            try:
+                await page.evaluate(
+                    """(xp) => {
+                        const el = document.evaluate(xp, document, null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                        if (el) {
+                            el.scrollIntoView({block: 'center', inline: 'center'});
+                            el.click();
+                        }
+                    }""",
+                    target.xpath,
+                )
+                await asyncio.sleep(0.4)
+                summary = await _page_summary(page)
+                logger.debug("click_element via JS el.click()", index=index, text=elem_label)
+                return ActionResult.ok(content=f"Clicked element {index} ({elem_label}). {summary}")
+            except Exception:
+                pass  # fall through
+
+        # Strategy 4: Playwright dispatch_event — fires a real MouseEvent that
+        # bypasses actionability checks (pointer-events: none, hidden, etc.).
+        if target.xpath:
+            try:
+                locator = page.locator(f"xpath={target.xpath}")
+                await locator.dispatch_event("click", timeout=8_000)
+                await asyncio.sleep(0.4)
+                summary = await _page_summary(page)
+                logger.debug("click_element via dispatch_event", index=index, text=elem_label)
+                return ActionResult.ok(content=f"Clicked element {index} ({elem_label}). {summary}")
+            except Exception:
+                pass
+
+        # All strategies failed — last-resort index-based JS click
+        await page.evaluate(
+            "(idx) => { document.querySelectorAll('a,button,input,select,textarea')[idx]?.click(); }",
+            index,
+        )
         await asyncio.sleep(0.4)
         summary = await _page_summary(page)
-        logger.debug("click_element via coords", index=index, text=elem_label)
+        logger.debug("click_element via index JS fallback", index=index, text=elem_label)
         return ActionResult.ok(content=f"Clicked element {index} ({elem_label}). {summary}")
     except Exception as exc:
         logger.warning("click_element failed", index=index, error=str(exc))
@@ -912,5 +956,97 @@ async def reload_page(browser_session: BrowserSession) -> ActionResult:
         return ActionResult.ok(content=f"Page reloaded. {summary}")
     except Exception as exc:
         logger.warning("reload_page failed", error=str(exc))
+        return ActionResult.fail(error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 19. search_and_submit
+# ---------------------------------------------------------------------------
+
+
+@registry.action(
+    description=(
+        "Fill a search / query input field AND submit the form in one step. "
+        "Use this INSTEAD of separate input_text + send_keys/click_element when "
+        "performing searches (hh.ru, Google, etc.) to avoid losing focus or index "
+        "shifts after autocomplete dropdowns appear. "
+        "`index`: element index of the search input from the DOM list. "
+        "`query`: the search text to type. "
+        "After filling, presses Enter to submit."
+    )
+)
+async def search_and_submit(
+    index: int,
+    query: str,
+    browser_session: BrowserSession,
+) -> ActionResult:
+    """Fill a search field and press Enter — atomic, survives autocomplete DOM mutations."""
+    try:
+        page = browser_session.get_current_page()
+        elements = await _dom_service.get_interactive_elements(page)
+
+        target = None
+        if 0 <= index < len(elements):
+            target = elements[index]
+        elif 1 <= index <= len(elements):
+            target = elements[index - 1]
+
+        if target is None:
+            return ActionResult.fail(error=f"Element index {index} not found.")
+
+        # Step 1 — fill the field (same waterfall as input_text) ────────────
+        filled = False
+        if target.xpath:
+            try:
+                locator = page.locator(f"xpath={target.xpath}")
+                await locator.scroll_into_view_if_needed(timeout=5_000)
+                await locator.click(timeout=5_000)
+                await asyncio.sleep(0.15)
+                await locator.fill(query, timeout=8_000)
+                filled = True
+                logger.debug("search_and_submit fill via locator.fill", index=index, query=query[:40])
+            except Exception as exc:
+                logger.debug("search_and_submit fill fallback", error=str(exc))
+
+        if not filled:
+            bb = target.bounding_box
+            if bb:
+                x = bb.x + bb.width / 2
+                y = bb.y + bb.height / 2
+                await page.mouse.click(x, y)
+                await asyncio.sleep(0.15)
+                await page.mouse.click(x, y, click_count=3)
+                await asyncio.sleep(0.1)
+            if target.xpath:
+                await page.evaluate(
+                    """([xp, val]) => {
+                        const el = document.evaluate(xp, document, null,
+                            XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+                        if (!el) return;
+                        const ns = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value')?.set
+                            || Object.getOwnPropertyDescriptor(
+                                window.HTMLTextAreaElement.prototype, 'value')?.set;
+                        if (ns) ns.call(el, val);
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }""",
+                    [target.xpath, query],
+                )
+                logger.debug("search_and_submit fill via native setter", index=index)
+            else:
+                await page.keyboard.type(query, delay=30)
+
+        # Step 2 — wait briefly for autocomplete, then press Enter ─────────
+        await asyncio.sleep(0.4)
+        await page.keyboard.press("Enter")
+        await asyncio.sleep(0.8)
+        summary = await _page_summary(page)
+        logger.debug("search_and_submit press Enter", index=index, query=query[:40])
+        return ActionResult.ok(
+            content=f"Searched for '{query}' and submitted. {summary}"
+        )
+    except Exception as exc:
+        logger.warning("search_and_submit failed", index=index, error=str(exc))
         return ActionResult.fail(error=str(exc))
 

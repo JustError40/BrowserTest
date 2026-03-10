@@ -68,6 +68,7 @@ page, prefer scrolling or waiting before selecting.
 | `check_checkbox`           | Check or uncheck a checkbox / radio button                           | `index`, `is_checked` (bool)                                                             |
 | `upload_file`              | Upload a local file to a `<input type=file>` element                 | `index`, `file_path` (absolute path to local file)                                       |
 | `reload_page`              | Reload / refresh the current page (like F5)                          | *(no params)*                                                                            |
+| `search_and_submit`        | Fill a search/query field AND press Enter in one atomic step          | `index`, `query` (search text)                                                           |
 
 ---
 
@@ -113,6 +114,8 @@ Before choosing a tool, analyse the screenshot to:
 18. **reload_page** — use when screenshot shows an error page, stale content, or blank viewport.
 19. **If already on the correct URL** and the instruction says "navigate there" — call
     `get_page_state` or `extract_content` to confirm, not `done`.
+20. **search_and_submit** — use INSTEAD of `input_text` + `send_keys('Enter')` for any search action. Fills and submits atomically; survives autocomplete dropdown DOM mutations. Amber badge marks the search input. `{"index": N, "query": "search text"}`.
+21. **click_element failures** — if a button appears to do nothing (no URL change, no visible state change), it may be intercepted by pointer-events overlay. `click_element` will retry with JS `el.click()` and `dispatch_event` automatically — just retry once before escalating.
 
 ---
 

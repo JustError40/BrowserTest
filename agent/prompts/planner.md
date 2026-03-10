@@ -128,6 +128,7 @@ The Navigator has these tools available — write step descriptions that map cle
 | **Hover to reveal menu**            | `"Hover over the '[Item]' nav element to reveal the sub-menu (use hover)"`               |
 | **Upload file**                     | `"Upload '/path/to/file.pdf' to the file input field (use upload_file)"`                 |
 | **Reload page**                     | `"Reload the page to refresh content (use reload_page)"`                                 |
+| **Search and submit**               | `"Search for '[query]' in the search field (use search_and_submit with query='[query]')"` |
 
 **KEY RULE**: When the task involves reading text, articles, or content from a page,
 ALWAYS include a dedicated `read_page_text` step AFTER navigation.

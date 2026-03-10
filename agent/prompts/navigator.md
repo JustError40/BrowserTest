@@ -43,6 +43,7 @@ No explanation, no markdown, no text before or after the JSON.
 | `check_checkbox`           | Check or uncheck a checkbox / radio button                           | `index`, `is_checked` (bool)                                                             |
 | `upload_file`              | Upload a local file to a `<input type=file>` element                 | `index`, `file_path` (absolute path to local file)                                       |
 | `reload_page`              | Reload / refresh the current page (like F5)                          | *(no params)*                                                                            |
+| `search_and_submit`        | Fill a search/query field AND press Enter in one atomic step          | `index`, `query` (search text)                                                           |
 
 ---
 
@@ -50,7 +51,7 @@ No explanation, no markdown, no text before or after the JSON.
 
 1. **navigate_to** — use when the instruction mentions a URL or "go to".
 2. **go_back** — use when the wrong page was opened or when returning to a previous state.
-3. **click_element** — use the index from the DOM list below. Prefer exact label match.
+3. **click_element** — use the index from the DOM list below. Prefer exact label match. Has 4 fallback strategies ending in `el.click()` JS — reliable on React SPAs.
 4. **input_text** — use directly on an input field without clicking first. `input_text` focuses the element itself. Do NOT call `click_element` before `input_text`.
 5. **send_keys** — use for `Enter` (submit), `Tab` (move focus), `Escape` (close), `ArrowDown/Up` (list navigation).
 6. **get_page_state** — use RIGHT AFTER `click_element` or `navigate_to` to confirm what page opened. Also use when unsure of current page.
@@ -70,6 +71,7 @@ No explanation, no markdown, no text before or after the JSON.
 17. **upload_file** — use only when the element is `<input type=file>` and `file_path` is known.
 18. **reload_page** — use when the page appears stuck, or after a file upload to see the updated state.
 19. **If already on the correct URL** and the instruction says "navigate there" — call `get_page_state` or `extract_content` first, do NOT call `done` without verifying content.
+20. **search_and_submit** — use INSTEAD of `input_text` + `send_keys('Enter')` when doing a search on any site (hh.ru, Google, LinkedIn, etc.). It fills the field AND presses Enter atomically, so autocomplete dropdowns and DOM re-renders don't break the flow. `{"index": N, "query": "search text"}`.
 
 ---
 
