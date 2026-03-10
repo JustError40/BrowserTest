@@ -119,7 +119,44 @@ Before choosing a tool, analyse the screenshot to:
 
 ---
 
-## Page Exploration (visual + DOM combined)
+## Email Visual Pattern (Yandex Mail / Gmail / Outlook)
+
+When the screenshot shows an **email client interface**:
+
+| Visual element visible                         | What it is                | Action                                      |
+|------------------------------------------------|---------------------------|---------------------------------------------|
+| List of rows with sender name + subject        | Inbox email list          | `read_page_text` to capture all subjects    |
+| Small square checkbox on left of email row     | Email select checkbox     | `click_element` to select before batch ops  |
+| Toolbar buttons appearing after checkbox click | Spam/Delete/Move toolbar  | `click_element` on "В спам" or "Удалить"    |
+| Unread email row (bold text)                   | Unread email              | `click_element` to open and read body       |
+| Left sidebar folder list                       | Folder navigation         | `click_element` on "Входящие" for inbox     |
+
+**Spam visual signals** — badge items with these patterns are spam candidates:
+- Sender shows `no-reply`, `noreply`, `newsletter`, `promo`, `info@` unfamiliar domain
+- Subject contains: скидка, акция, распродажа, вы выиграли, получите, click here
+
+**STOP signal** — if the screenshot shows a login / captcha page: use `done` with
+`success: false` and message "Login required — cannot access email".
+
+---
+
+## Food Delivery / Cart Visual Pattern
+
+When the screenshot shows a **food delivery or e-commerce** interface:
+
+| Visual element visible                         | What it is                | Action                                      |
+|------------------------------------------------|---------------------------|---------------------------------------------|
+| Grid/list of menu items with price + `+` badge | Restaurant menu           | `click_element` on `+` badge to add to cart |
+| Bottom sticky bar showing cart count and price | Cart summary bar          | `click_element` to open cart/checkout       |
+| Cart icon (🛒) in top-right navbar             | Cart link                 | `click_element` to open cart                |
+| Order summary with items list and total price  | Cart / checkout page      | `read_page_text` then `done` with summary   |
+| "Оплатить" / "Pay" button                      | Final payment button      | **DO NOT CLICK** unless user said "confirm" |
+
+**Item disambiguation** — when screenshot shows similar items (e.g., different sizes),
+read the item description text near the badge before clicking `+`.
+
+---
+
 
 When the instruction is a **page exploration** step (e.g. "Explore the page", "Find all panels", "Open all sections and summarize"), use BOTH the screenshot and DOM list:
 

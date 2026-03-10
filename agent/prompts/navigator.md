@@ -105,17 +105,97 @@ If the instruction is a **page exploration** step (e.g. "Explore the page", "Fin
 
 When the task is to type into a **search bar** (role=searchbox, role=combobox, placeholder contains "search" / "поиск" / "профессия"):
 
-1. Use `input_text` with the element's `index` directly — **no need to click first**.
-2. After `input_text`, call `send_keys` with `keys="Enter"` to submit (or click the search button).
-3. If `input_text` says success but the field appears empty: try `click_element` on the input index, then `input_text` again.
-4. Do NOT use `extract_content` or `read_page_text` before typing — that wastes a step.
+1. Use `search_and_submit` — it fills AND presses Enter atomically. This avoids autocomplete
+   dropdown DOM mutations that break a separate `input_text` + `send_keys` sequence.
+2. If `search_and_submit` is unavailable, use `input_text` directly (no preceding click needed),
+   then `send_keys` with `keys="Enter"`.
+3. Do NOT use `extract_content` or `read_page_text` before typing — that wastes a step.
 
-Example for hh.ru / any job board:
+### ⚠ Job board disambiguation (hh.ru / LinkedIn / HeadHunter)
+
+**「Отклики и приглашения」/ 「Мои отклики」/ 「Приглашения」= EXISTING responses.  
+These are NOT new vacancies. Do NOT click these when the task says "find" or "search" vacancies.**
+
+To find **new** vacancies: use the **search input field** on the main page (role=searchbox, placeholder="Должность, компания или ключевые слова").
+
+Correct flow for job search on hh.ru:
 ```json
-// Step 1: type into search
-{"tool": "input_text", "params": {"index": 4, "text": "Python developer"}}
-// Step 2: submit
-{"tool": "send_keys", "params": {"keys": "Enter"}}
+// Step 1: search for new vacancies — use search_and_submit on the search box
+{"tool": "search_and_submit", "params": {"index": N, "query": "AI инженер"}}
+// (look for element with role=searchbox or placeholder='Должность', NOT any nav link)
+```
+
+Wrong — do NOT do this when looking for new vacancies:
+```json
+// BAD: this opens existing responses page, not a search
+{"tool": "click_element", "params": {"index": N}}  // where element text = "Отклики и приглашения"
+```
+
+---
+
+## Email Navigation Pattern (Yandex Mail / Gmail / Outlook)
+
+When the instruction is about **reading, sorting, or deleting emails**:
+
+1. **Reading the inbox list** — use `read_page_text` on the inbox page to capture all visible
+   email subjects + senders. Do NOT click every email to open it; the list view is enough
+   to identify obvious spam (no-reply senders, promo subjects).
+
+2. **Opening one email** — click the email row by its index, then use `read_page_text` to
+   read the full body. Only open emails when body content is explicitly needed.
+
+3. **Selecting an email for deletion / spam marking** — look for a checkbox element next
+   to the email row (usually `input[type=checkbox]`). Click it first, THEN click the
+   "Удалить" / "В спам" / "Delete" / "Spam" button that appears in the toolbar.
+
+4. **"В спам" vs "Удалить"** — prefer "В спам" / "Mark as spam" when it's available;
+   it trains the spam filter. Use "Удалить" / "Delete" only if no spam button is found.
+
+5. **Spam signals** — identify these patterns as spam:
+   - Sender address: `no-reply@*`, `newsletter@*`, `noreply@*`, `promo@*`, `info@*`
+   - Subject keywords: акция, распродажа, скидка, -50%, вы выиграли, claim your prize,
+     подтвердите подписку, отписаться, unsubscribe, click here, phishing
+
+6. **Do NOT delete emails from**: known contacts, work/business senders, services the
+   user is registered at (unless subject clearly shows promo), banks, government.
+
+Example — check checkbox then mark as spam:
+```json
+// Step 1: click checkbox of spam email
+{"tool": "click_element", "params": {"index": 5}}  // index 5 = checkbox of email row
+// Step 2: click "В спам" button (toolbar that appeared)
+{"tool": "click_element", "params": {"index": 12}}  // index 12 = "В спам" button
+```
+
+---
+
+## Food Delivery / E-commerce Cart Pattern
+
+When the instruction is to **add items to cart and go to checkout**:
+
+1. **Finding the restaurant from history** — if instruction says "from where I ordered
+   last time" / "из того места": click Profile / Профиль → "История заказов" / Order history,
+   read with `read_page_text` to find restaurant name, then navigate to it.
+
+2. **Reading the menu** — use `read_page_text` on the restaurant page. Items will be
+   listed with names and prices. Identify the exact item name before clicking.
+
+3. **Adding to cart** — look for a `+` button or "Добавить" / "Add" button element NEXT
+   TO the item name (not a generic "Add to cart" at page level). Click that specific button.
+   If multiple similar items exist (e.g., "BBQ Бургер 200г" vs "BBQ Бургер 350г"), read
+   descriptions carefully to pick the right one.
+
+4. **Going to checkout** — after all items added, look for a floating cart bar at the
+   bottom or a cart icon in the header. Click it to open the cart/корзина.
+
+5. **STOP before payment** — after arriving at the order confirmation / checkout page,
+   use `done` with a summary. Do NOT click "Оплатить" / "Pay" / "Place order" unless
+   the user's instruction explicitly says to confirm or pay.
+
+Example — add item to cart:
+```json
+// Look for '+' button right next to "BBQ Бургер" in the DOM list
+{"tool": "click_element", "params": {"index": 8}}  // index 8 = '+' button for BBQ Бургер
 ```
 
 ---

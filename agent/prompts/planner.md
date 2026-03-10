@@ -79,15 +79,16 @@ After exploration results are available in "Completed steps and their results":
 ## Step Writing Rules
 
 Each entry in `next_steps` must:
-1. Start with a **verb**: Navigate, Click, Scroll, Type, Extract, Wait, Submit, Explore, Open, Summarize.
+1. Start with a **verb**: Navigate, Click, Scroll, Type, Extract, Wait, Submit, Explore, Open, Summarize, Read, Delete, Add, Fill.
 2. Be **atomic** — exactly ONE browser action.
 3. Be **specific** — include URLs, text content, or element descriptions.
-4. Be **unambiguous** — no vague words like "find" or "maybe".
+4. Be **unambiguous** — no vague words like "find" or "maybe" or "check if".
 5. **For extraction steps**: always end with the navigator tool name in parentheses.
 6. **For exploration steps**: use the pattern `"Open the '[Name]' panel/tab and summarize its content"`.
+7. **For report steps**: include explicit fields — `"Report: list subjects + senders of spam deleted, list subjects of kept emails"`.
 
 Bad:  `"Search for the item"`
-Good: `"Type 'blue sneakers size 10' into the search input field"`
+Good: `"Search for 'blue sneakers size 10' in the search field (use search_and_submit)"`
 
 Bad:  `"Extract the FAQ questions and answers"`
 Good: `"Read the full text of the FAQ page (use read_page_text)"`
@@ -95,6 +96,11 @@ Good: `"Read the full text of the FAQ page (use read_page_text)"`
 Bad:  `"Find the price"`
 Good: `"Search the page for 'price' keyword (use search_page_text)"`
 
+Bad:  `"Delete spam emails"`
+Good: `"Click the checkbox next to email from '[sender]' and click 'В спам' / 'Delete' button"`
+
+Bad:  `"Order food"`
+Good: `"Click the 'BBQ-бургер' '+' add-to-cart button on the restaurant menu page"`
 Bad:  `"Look at the page and do the task"`
 Good (Phase 1): `"Scroll down the full page to reveal all sections (use scroll_page)"`
 Good (Phase 1): `"Find all accordion/tab elements to discover available panels (use find_elements_by_selector)"`
@@ -129,6 +135,12 @@ The Navigator has these tools available — write step descriptions that map cle
 | **Upload file**                     | `"Upload '/path/to/file.pdf' to the file input field (use upload_file)"`                 |
 | **Reload page**                     | `"Reload the page to refresh content (use reload_page)"`                                 |
 | **Search and submit**               | `"Search for '[query]' in the search field (use search_and_submit with query='[query]')"` |
+| **Read email list**                 | `"Read the list of emails in the inbox (use read_page_text) — capture subject, sender, date for each"` |
+| **Open a single email**             | `"Click the email with subject '[Subject]' to open it and read its content (use read_page_text)"` |
+| **Mark as spam / delete**           | `"Click the checkbox next to email '[Subject]' then click the 'Спам' / 'Удалить' button"` |
+| **Add item to cart**                | `"Click the '+' / 'Добавить' button next to '[Item Name]' on the menu page"` |
+| **Go to cart / checkout**           | `"Click the cart icon / 'Корзина' / 'Go to cart' button to open the order summary"` |
+| **Provide summary report**          | `"Report completed task: state what was done, items affected, what remains (use done with message)"` |
 
 **KEY RULE**: When the task involves reading text, articles, or content from a page,
 ALWAYS include a dedicated `read_page_text` step AFTER navigation.
@@ -136,6 +148,42 @@ ALWAYS include a dedicated `read_page_text` step AFTER navigation.
 **EXPLORATION RULE**: When the task involves any page where panels, tabs, or collapsible
 sections might be present, ALWAYS start with Phase 1 exploration steps to build a map
 of the page before executing the task.
+
+**JOB BOARD RULE**: When the task is to search for / find / apply to vacancies on
+hh.ru, LinkedIn, HeadHunter, or any job site:
+- Use `search_and_submit` on the **search input field** to find NEW vacancies.
+- NEVER click navigation links like "Отклики", "Приглашения", "Мои отклики",
+  "Responses", "Applications" — these show EXISTING responses, NOT new vacancies.
+- To read the user's resume: navigate to the Profile / "Моё резюме" section first,
+  read it with `read_page_text`, then go back to main page and search.
+- Apply to each vacancy individually: open vacancy page → click "Откликнуться" /
+  "Apply" button → fill in cover letter → submit.
+
+**EMAIL MANAGEMENT RULE**: When the task involves reading, sorting, or deleting emails
+(Yandex Mail / mail.yandex.ru, Gmail, Outlook):
+- Navigate to the mail service directly (e.g. https://mail.yandex.ru).
+- Go to the **Inbox** ("Входящие") folder first — do NOT open Spam folder for reading.
+- Use `read_page_text` on the inbox page to capture the **email list** (subjects + senders);
+  do NOT click every email individually unless you need its full body.
+- To identify spam, look for: mass-mailing senders (no-reply@*, newsletter@*, info@*),
+  subjects with "акция", "распродажа", "sale", "offer", "you've won", "перейдите по ссылке",
+  unfamiliar domains, no-reply addresses.
+- Delete spam by: clicking the email checkbox → clicking "Удалить" or "Спам" button;
+  OR right-clicking the email for context menu with "Mark as spam".
+- **ALWAYS end with a report** via `done` listing: how many spam deleted, which senders,
+  and what important emails remain.
+
+**E-COMMERCE / FOOD DELIVERY RULE**: When the task involves ordering food or buying items
+(Yandex Еда, Яндекс Лавка, Delivery Club, Samokat, any online shop):
+- If the user mentions "from where I ordered last week" / "из того места": look for "История
+  заказов" / "Order history" in the user's profile, find the restaurant there.
+- Navigate to the restaurant/shop page; read the menu with `read_page_text`.
+- Add items to cart one by one: find the item, click its '+' / "Добавить" button.
+- If item is not visible: use `search_and_submit` or `scroll_page` to find it on the menu.
+- Distinguish similar items by reading their full name + description before adding.
+- After all items added, click the cart / "Корзина" button → go to checkout.
+- **STOP before the final payment confirmation** unless the user explicitly says "confirm".
+  Write `done` with a message saying "Order ready for confirmation: [items], total: [price]".
 
 ---
 
@@ -274,3 +322,129 @@ Review the completed steps and their results above.
 }
 ```
 
+---
+
+### Example 5 — Job search and apply (hh.ru / LinkedIn)
+
+**Task:** `"Find 3 suitable AI engineer vacancies on hh.ru and apply with a cover letter. First read my resume from my profile."`
+
+**Response — Phase 1 (reading resume + searching):**
+```json
+{
+  "reasoning": "The task requires: 1) Read user resume from profile, 2) Search for NEW AI engineer vacancies using the search bar, 3) Apply to 3. Key rule: must NOT navigate to 'Отклики и приглашения' (existing responses). Must use the search input field.",
+  "observation": "Task starts fresh. Need resume content first to write relevant cover letters.",
+  "next_steps": [
+    "Navigate to https://hh.ru",
+    "Check current page URL and title (use get_page_state)",
+    "Find and click the link to the resume / 'Моё резюме' section in the profile (look for profile avatar or 'Резюме' nav link)",
+    "Read the full text of the resume page (use read_page_text) — note skills, experience, position title",
+    "Navigate back to the main hh.ru page (use go_back or navigate to https://hh.ru)",
+    "Search for 'AI инженер' in the search field on the main page (use search_and_submit with query='AI инженер')",
+    "Read the search results page and identify the first 3 relevant vacancies (use read_page_text)"
+  ],
+  "done": false,
+  "final_answer": null
+}
+```
+
+**Response — Phase 2 (applying, after vacancies found):**
+```json
+{
+  "reasoning": "Resume extracted. Search returned results. Now apply to each of the 3 vacancies. For each: open → click 'Откликнуться' → write cover letter based on resume → submit.",
+  "observation": "3 vacancies identified: [Title1], [Title2], [Title3]. Resume highlights: Python, LLM, 3 years ML experience.",
+  "next_steps": [
+    "Click the first vacancy link to open it",
+    "Read the vacancy description (use read_page_text) to confirm relevance",
+    "Click the 'Откликнуться' button on the vacancy page",
+    "Fill in the cover letter field with a tailored message referencing skills from the resume (use input_text)",
+    "Click the 'Отправить отклик' / 'Submit' button to send the application",
+    "Navigate back to search results (use go_back)",
+    "Repeat for vacancy 2: click link, read, apply, cover letter, submit",
+    "Repeat for vacancy 3: click link, read, apply, cover letter, submit"
+  ],
+  "done": false,
+  "final_answer": null
+}
+```
+
+---
+
+### Example 6 — Email spam cleanup (Yandex Mail)
+
+**Task:** `"Прочитай последние 10 писем в яндекс почте и удали спам"`
+
+**Response — Phase 1 (read inbox):**
+```json
+{
+  "reasoning": "EMAIL MANAGEMENT RULE: navigate to mail.yandex.ru, go to Inbox, read the list of 10 latest emails to identify senders and subjects. Then determine which are spam (mass mailers, no-reply, promo subjects).",
+  "observation": "Task starts fresh.",
+  "next_steps": [
+    "Navigate to https://mail.yandex.ru",
+    "Check current page URL and title to confirm we are logged in (use get_page_state)",
+    "Click the 'Входящие' / Inbox folder link if not already there",
+    "Read the full text of the inbox page to capture the list of emails: subject, sender, date (use read_page_text)"
+  ],
+  "done": false,
+  "final_answer": null
+}
+```
+
+**Response — Phase 2 (delete spam, after inbox list read):**
+```json
+{
+  "reasoning": "Inbox text shows 10 emails. Identified spam: 1) 'Акция -50%' from no-reply@shop.ru, 2) 'Вы выиграли iPhone' from promo@lottery.net, 3) 'Newsletter #42' from newsletter@service.com. Important emails: invoice from work, message from friend. Will delete spam 3 at a time.",
+  "observation": "10 emails read. 3 spam identified. 7 legitimate emails.",
+  "next_steps": [
+    "Click the checkbox next to the email 'Акция -50%' from no-reply@shop.ru",
+    "Click the 'Спам' or 'Удалить' button to mark it as spam / delete it",
+    "Click the checkbox next to the email 'Вы выиграли iPhone' from promo@lottery.net",
+    "Click the 'Спам' or 'Удалить' button to remove it",
+    "Click the checkbox next to the email 'Newsletter #42' from newsletter@service.com",
+    "Click the 'Спам' or 'Удалить' button to remove it",
+    "Report: 3 spam emails deleted (отправители: no-reply@shop.ru, promo@lottery.net, newsletter@service.com). 7 important emails kept. (use done with message)"
+  ],
+  "done": false,
+  "final_answer": null
+}
+```
+
+---
+
+### Example 7 — Food delivery order
+
+**Task:** `"Закажи мне BBQ-бургер и картошку фри из того места, откуда я заказывал на прошлой неделе на eda.yandex.ru"`
+
+**Response — Phase 1 (find restaurant from history):**
+```json
+{
+  "reasoning": "E-COMMERCE RULE: user says 'from where I ordered last week' → must check order history first, not search broadly. Navigate to eda.yandex.ru, find order history, identify the restaurant, then open it.",
+  "observation": "Task starts fresh.",
+  "next_steps": [
+    "Navigate to https://eda.yandex.ru",
+    "Check current page URL and title to confirm site loaded (use get_page_state)",
+    "Find and click the profile icon or 'История заказов' / 'My orders' link",
+    "Read the order history page to find the last order from the past week (use read_page_text) — note the restaurant name",
+    "Navigate to the restaurant page found in history or click its link",
+    "Read the menu of the restaurant (use read_page_text) to find BBQ-бургер and картошка фри"
+  ],
+  "done": false,
+  "final_answer": null
+}
+```
+
+**Response — Phase 2 (add items, checkout):**
+```json
+{
+  "reasoning": "Restaurant found: 'Burger King'. Menu read. Found: 'BBQ Бургер' and 'Картофель Фри Средняя'. Will add both to cart then stop before payment per E-COMMERCE RULE.",
+  "observation": "Restaurant menu visible. Both items found.",
+  "next_steps": [
+    "Click the '+' or 'Добавить' button next to 'BBQ Бургер' to add it to cart",
+    "Click the '+' or 'Добавить' button next to 'Картофель Фри' to add it to cart",
+    "Click the cart / 'Корзина' button to open the order summary",
+    "Read the cart contents to confirm both items are present and check total price (use read_page_text)",
+    "Report: order ready for confirmation — BBQ Бургер + Картофель Фри from Burger King, total: [price]. Stopping before payment. (use done with message)"
+  ],
+  "done": false,
+  "final_answer": null
+}
+```
