@@ -56,6 +56,34 @@ class Executor:
         self._navigator = navigator
         self._stopped = False
 
+    async def _capture_post_action_state(self, context: AgentContext) -> str:
+        """Capture deterministic browser state after an action.
+
+        This verification is executed by the executor itself (without LLM tools),
+        so planner always receives factual "where we are now" context even when
+        navigator chose a suboptimal action.
+        """
+        try:
+            session = context.browser_session
+            if session is None:
+                return "Browser session unavailable."
+
+            page = session.get_current_page()
+            url = page.url
+            title = await page.title()
+            snippet: str = await page.evaluate(
+                """() => {
+                    const text = (document.body?.innerText || '')
+                        .replace(/[ \t]+/g, ' ')
+                        .replace(/\n{2,}/g, '\n')
+                        .trim();
+                    return text.slice(0, 400);
+                }"""
+            )
+            return f"URL: {url}\nTitle: {title}\nSnippet: {snippet}"
+        except Exception as exc:
+            return f"Post-action page state unavailable: {exc}"
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def stop(self) -> None:
@@ -134,22 +162,36 @@ class Executor:
                         instruction, context.browser_session
                     )
                     steps += 1
-                    last_output = nav_result.observation or ""
-                    last_obs_full = nav_result.observation or ""
+                    post_state = await self._capture_post_action_state(context)
+                    nav_observation = nav_result.observation or ""
+                    combined_observation = (
+                        f"{nav_observation}\n\nPost-action page state:\n{post_state}"
+                        if nav_observation
+                        else f"Post-action page state:\n{post_state}"
+                    )
+
+                    last_output = combined_observation
+                    last_obs_full = combined_observation
                     # Track every step result for planner context (cap individual obs at 4000 chars)
-                    obs = (nav_result.observation or "(no output)")[:4000]
+                    obs = combined_observation[:4000]
                     step_results.append(
                         f"Step {steps} [{instruction[:80]}]: {obs}"
                     )
 
                     if nav_result.success:
-                        await emit(EventType.STEP_END, Actors.NAVIGATOR, step=steps)
+                        await emit(
+                            EventType.STEP_END,
+                            Actors.NAVIGATOR,
+                            step=steps,
+                            page_state=post_state,
+                        )
                     else:
                         await emit(
                             EventType.STEP_FAIL,
                             Actors.NAVIGATOR,
                             step=steps,
                             error=nav_result.observation,
+                            page_state=post_state,
                         )
 
                     if nav_result.done:
