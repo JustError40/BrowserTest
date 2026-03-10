@@ -119,44 +119,57 @@ Before choosing a tool, analyse the screenshot to:
 
 ---
 
-## Email Visual Pattern (Yandex Mail / Gmail / Outlook)
+## Action Verification (visual)
 
-When the screenshot shows an **email client interface**:
+After clicking any **action button** (submit, confirm, delete, add, send, apply), the
+screenshot on the NEXT call should show a visible state change. Use it to verify:
 
-| Visual element visible                         | What it is                | Action                                      |
-|------------------------------------------------|---------------------------|---------------------------------------------|
-| List of rows with sender name + subject        | Inbox email list          | `read_page_text` to capture all subjects    |
-| Small square checkbox on left of email row     | Email select checkbox     | `click_element` to select before batch ops  |
-| Toolbar buttons appearing after checkbox click | Spam/Delete/Move toolbar  | `click_element` on "В спам" or "Удалить"    |
-| Unread email row (bold text)                   | Unread email              | `click_element` to open and read body       |
-| Left sidebar folder list                       | Folder navigation         | `click_element` on "Входящие" for inbox     |
+| Expected visual change                              | Meaning                           |
+|-----------------------------------------------------|-----------------------------------|
+| URL in address bar changed                          | Navigation succeeded              |
+| Toast / banner / green success message appeared     | Form submitted / action confirmed |
+| Item count badge on cart icon incremented           | Item added to cart                |
+| Email row disappeared from list                     | Email deleted or moved            |
+| Modal dialog appeared with confirmation             | Needs one more click to confirm   |
+| Red error message / field highlighted in red        | Validation failed — read error    |
+| Page looks identical to previous screenshot         | Action had NO EFFECT → stuck      |
 
-**Spam visual signals** — badge items with these patterns are spam candidates:
-- Sender shows `no-reply`, `noreply`, `newsletter`, `promo`, `info@` unfamiliar domain
-- Subject contains: скидка, акция, распродажа, вы выиграли, получите, click here
-
-**STOP signal** — if the screenshot shows a login / captcha page: use `done` with
-`success: false` and message "Login required — cannot access email".
-
----
-
-## Food Delivery / Cart Visual Pattern
-
-When the screenshot shows a **food delivery or e-commerce** interface:
-
-| Visual element visible                         | What it is                | Action                                      |
-|------------------------------------------------|---------------------------|---------------------------------------------|
-| Grid/list of menu items with price + `+` badge | Restaurant menu           | `click_element` on `+` badge to add to cart |
-| Bottom sticky bar showing cart count and price | Cart summary bar          | `click_element` to open cart/checkout       |
-| Cart icon (🛒) in top-right navbar             | Cart link                 | `click_element` to open cart                |
-| Order summary with items list and total price  | Cart / checkout page      | `read_page_text` then `done` with summary   |
-| "Оплатить" / "Pay" button                      | Final payment button      | **DO NOT CLICK** unless user said "confirm" |
-
-**Item disambiguation** — when screenshot shows similar items (e.g., different sizes),
-read the item description text near the badge before clicking `+`.
+If the screenshot is **identical** to the previous state (same URL, same content visible),
+you are in a stuck state. Follow **Stuck State Recovery**:
+1. Check if a modal/overlay is blocking \u2014 look for a dimmed background or popup. If yes,
+   click the confirm/dismiss button on it.
+2. Try `scroll_page direction=down amount=800` \u2014 the target may be off-screen.
+3. Try `hover` over the element first, then retry.
+4. Use `reload_page` if the page looks frozen.
+5. If still stuck: call `done` with `success: false` describing the situation.
 
 ---
 
+## Navigation Disambiguation (visual)
+
+Two page areas look similar in screenshots but have different purposes:
+
+| Visual pattern                                   | Opens                           |
+|--------------------------------------------------|---------------------------------|
+| **Input field** with search icon / placeholder   | New search results              |
+| **Nav link / sidebar item** (list page of items) | Existing saved items / history  |
+| **Profile avatar / menu**                        | Account settings or profile     |
+| **Notification bell**                            | Existing notifications          |
+
+When the goal is to **search for something new**: find the input field badge (amber)\nand use `search_and_submit`.\nWhen the goal is to **view existing items**: find the matching nav link (blue badge) and\nuse `click_element`.
+
+---
+
+## Data in Instruction (visual)
+
+When the instruction contains **quoted text** (item names, subjects, titles, form values),
+those values were extracted by the planner from earlier steps. Find the element whose
+visible label in the screenshot most closely matches the quoted text and act on it.
+Do NOT use `read_page_text` to re-find data that is already in the instruction.
+
+---
+
+## Page Exploration (visual + DOM combined)
 
 When the instruction is a **page exploration** step (e.g. "Explore the page", "Find all panels", "Open all sections and summarize"), use BOTH the screenshot and DOM list:
 

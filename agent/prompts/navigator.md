@@ -111,92 +111,80 @@ When the task is to type into a **search bar** (role=searchbox, role=combobox, p
    then `send_keys` with `keys="Enter"`.
 3. Do NOT use `extract_content` or `read_page_text` before typing — that wastes a step.
 
-### ⚠ Job board disambiguation (hh.ru / LinkedIn / HeadHunter)
+### ⚠ Navigation disambiguation: “Search” vs “View existing”
 
-**「Отклики и приглашения」/ 「Мои отклики」/ 「Приглашения」= EXISTING responses.  
-These are NOT new vacancies. Do NOT click these when the task says "find" or "search" vacancies.**
+Many sites have two fundamentally different navigation paths that look similar:
 
-To find **new** vacancies: use the **search input field** on the main page (role=searchbox, placeholder="Должность, компания или ключевые слова").
+| Link / button text                    | What it actually opens                     |
+|---------------------------------------|--------------------------------------------|
+| Search field (input, role=searchbox)  | **New results page** — searching fresh     |
+| “My orders” / “Мои отклики” / “History” | **Existing** items for this user            |
+| “Inbox” / “Входящие”                 | **Existing** received messages              |
+| “Cart” / “Корзина”                    | **Current** shopping cart                   |
+| “Search” / “Поиск” (as a nav section)   | Usually search history, not a new search   |
 
-Correct flow for job search on hh.ru:
-```json
-// Step 1: search for new vacancies — use search_and_submit on the search box
-{"tool": "search_and_submit", "params": {"index": N, "query": "AI инженер"}}
-// (look for element with role=searchbox or placeholder='Должность', NOT any nav link)
-```
+When the instruction says **“find new / search for / look for”**, use the **search input field**
+(`search_and_submit`), not a navigation link to a listings/history section.
 
-Wrong — do NOT do this when looking for new vacancies:
-```json
-// BAD: this opens existing responses page, not a search
-{"tool": "click_element", "params": {"index": N}}  // where element text = "Отклики и приглашения"
-```
+When the instruction says **“open my / view existing / check previous”**, use the
+navigation link.
 
 ---
 
-## Email Navigation Pattern (Yandex Mail / Gmail / Outlook)
+## Action Verification
 
-When the instruction is about **reading, sorting, or deleting emails**:
+After calling `click_element` on any button that is expected to **change page state**
+(submit, confirm, delete, add to cart, apply, send, log in, navigate), the next
+call MUST be `get_page_state` or `read_page_text` to confirm the effect happened.
 
-1. **Reading the inbox list** — use `read_page_text` on the inbox page to capture all visible
-   email subjects + senders. Do NOT click every email to open it; the list view is enough
-   to identify obvious spam (no-reply senders, promo subjects).
+Expected state changes to verify:
 
-2. **Opening one email** — click the email row by its index, then use `read_page_text` to
-   read the full body. Only open emails when body content is explicitly needed.
+| Button / action                         | What to verify                                    |
+|-----------------------------------------|---------------------------------------------------|
+| Submit / Send / Отправить             | URL changed OR success message appeared           |
+| Delete / Удалить / Спам                | Item no longer visible on page                    |
+| Add to cart / Добавить               | Cart counter incremented OR item appears in cart  |
+| Log in                                  | User name / dashboard visible in page text        |
+| Apply / Откликнуться                 | Confirmation message or application sent badge    |
+| Navigate / click a link                 | URL or title changed from previous state          |
 
-3. **Selecting an email for deletion / spam marking** — look for a checkbox element next
-   to the email row (usually `input[type=checkbox]`). Click it first, THEN click the
-   "Удалить" / "В спам" / "Delete" / "Spam" button that appears in the toolbar.
-
-4. **"В спам" vs "Удалить"** — prefer "В спам" / "Mark as spam" when it's available;
-   it trains the spam filter. Use "Удалить" / "Delete" only if no spam button is found.
-
-5. **Spam signals** — identify these patterns as spam:
-   - Sender address: `no-reply@*`, `newsletter@*`, `noreply@*`, `promo@*`, `info@*`
-   - Subject keywords: акция, распродажа, скидка, -50%, вы выиграли, claim your prize,
-     подтвердите подписку, отписаться, unsubscribe, click here, phishing
-
-6. **Do NOT delete emails from**: known contacts, work/business senders, services the
-   user is registered at (unless subject clearly shows promo), banks, government.
-
-Example — check checkbox then mark as spam:
-```json
-// Step 1: click checkbox of spam email
-{"tool": "click_element", "params": {"index": 5}}  // index 5 = checkbox of email row
-// Step 2: click "В спам" button (toolbar that appeared)
-{"tool": "click_element", "params": {"index": 12}}  // index 12 = "В спам" button
-```
+If verification shows **no change**, you are in a stuck state (see below).
 
 ---
 
-## Food Delivery / E-commerce Cart Pattern
+## Stuck State Recovery
 
-When the instruction is to **add items to cart and go to checkout**:
+You are **stuck** when: an action was taken but `get_page_state` shows the same URL
+and title as before, or `read_page_text` shows the same content.
 
-1. **Finding the restaurant from history** — if instruction says "from where I ordered
-   last time" / "из того места": click Profile / Профиль → "История заказов" / Order history,
-   read with `read_page_text` to find restaurant name, then navigate to it.
+Recover in this order:
+1. **Scroll first**: use `scroll_page direction=down amount=1500` — the target element
+   may be below the viewport and was intercepted by a fixed header/banner.
+2. **Try alternative element**: the DOM list may have multiple similarly-labeled elements;
+   use `find_elements_by_selector` to list them all and pick the most specific one.
+3. **Hover then click**: some buttons only become active after `hover` — try hovering
+   first, re-check DOM, then click.
+4. **Reload**: if the page looks frozen, use `reload_page` then retry.
+5. **Report stuck**: if still stuck after 2 recovery attempts, call `done` with
+   `success: false` and message describing the stuck state and what was tried.
 
-2. **Reading the menu** — use `read_page_text` on the restaurant page. Items will be
-   listed with names and prices. Identify the exact item name before clicking.
+---
 
-3. **Adding to cart** — look for a `+` button or "Добавить" / "Add" button element NEXT
-   TO the item name (not a generic "Add to cart" at page level). Click that specific button.
-   If multiple similar items exist (e.g., "BBQ Бургер 200г" vs "BBQ Бургер 350г"), read
-   descriptions carefully to pick the right one.
+## Data in Instruction
 
-4. **Going to checkout** — after all items added, look for a floating cart bar at the
-   bottom or a cart icon in the header. Click it to open the cart/корзина.
+When the instruction contains **quoted values** (names, IDs, prices, text to fill in),
+use those values EXACTLY — do not re-read the page to find them again.
 
-5. **STOP before payment** — after arriving at the order confirmation / checkout page,
-   use `done` with a summary. Do NOT click "Оплатить" / "Pay" / "Place order" unless
-   the user's instruction explicitly says to confirm or pay.
+Examples:
+- Instruction: `"Click the vacancy 'ML Engineer at Yandex'"` → find element whose text
+  contains "ML Engineer at Yandex" and click it — do NOT use `read_page_text` first.
+- Instruction: `"Fill the cover letter: 'I have 3 years of Python experience'"` →
+  call `input_text` with that exact string — do NOT rewrite it.
+- Instruction: `"Delete email with subject 'Акция -50%'"` → find the element containing
+  that subject and act on it directly.
 
-Example — add item to cart:
-```json
-// Look for '+' button right next to "BBQ Бургер" in the DOM list
-{"tool": "click_element", "params": {"index": 8}}  // index 8 = '+' button for BBQ Бургер
-```
+Quoted values in step descriptions are the data extracted by the planner from earlier
+steps and forwarded here. Trust them.
 
 ---
 

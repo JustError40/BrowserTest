@@ -115,14 +115,19 @@ class Executor:
                     error="max steps",
                 )
 
-            # ── Execute each step from the plan ───────────────────────────────
+            # ── Execute one step from the plan, then immediately replan ───────
+            # This prevents long blind execution chains when page state drifts
+            # (e.g. wrong redirect after click) and enforces step-by-step
+            # validation via planner feedback after every action.
             nav_result: NavigatorResult | None = None
+            executed_instruction: str = ""
             for instruction in plan.next_steps:
                 if self._stopped:
                     break
                 if steps >= max_steps:
                     break
 
+                executed_instruction = instruction
                 await emit(EventType.STEP_START, Actors.NAVIGATOR, step=steps, instruction=instruction)
                 try:
                     nav_result = await self._navigator.execute_step(
@@ -155,6 +160,9 @@ class Executor:
                             steps=steps,
                             events_log=events_log,
                         )
+
+                    # Replan after every executed step (success or failure).
+                    break
                 except Exception as exc:
                     steps += 1
                     error_msg = str(exc)
@@ -177,11 +185,18 @@ class Executor:
                     error="stopped",
                 )
 
-            # ── Replan if last step failed ─────────────────────────────────────
+            # ── Replan after every executed step ───────────────────────────────
             # Small pause to avoid ZAI rate-limit stacking after navigator calls
             await asyncio.sleep(1.0)
 
-            if nav_result is not None and not nav_result.success:
+            if nav_result is None:
+                plan = await self._planner.replan(
+                    error="Planner returned no executable steps.",
+                    step_results=step_results,
+                    last_obs_full=last_obs_full,
+                )
+                logger.info("executor.replanned_empty_plan", done=plan.done)
+            elif not nav_result.success:
                 plan = await self._planner.replan(
                     error=nav_result.observation or "unknown error",
                     step_results=step_results,
@@ -189,13 +204,18 @@ class Executor:
                 )
                 logger.info("executor.replanned", done=plan.done)
             else:
-                # All steps succeeded; give planner the full last observation + all step results
+                # Step succeeded; ask planner to verify current state before next action
                 plan = await self._planner.replan(
                     error="",
                     step_results=step_results,
                     last_obs_full=last_obs_full,
                 )
-                logger.info("executor.check_done", done=plan.done)
+                logger.info(
+                    "executor.step_verified",
+                    step=steps,
+                    instruction=executed_instruction[:80],
+                    done=plan.done,
+                )
 
         # Stopped externally
         return ExecutorResult(
