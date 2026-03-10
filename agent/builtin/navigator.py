@@ -62,24 +62,52 @@ def _instruction_requires_nav_menu(instruction: str) -> bool:
     (hamburger/avatar/account menu triggers).
     """
     text = instruction.lower()
-    trigger_words = [
-        "menu",
-        "hamburger",
+    profile_words = [
         "avatar",
         "profile",
         "account",
         "resume",
-        "навигац",
-        "меню",
+        "cabinet",
         "аватар",
         "профил",
         "аккаунт",
         "резюм",
         "кабинет",
-        "шапк",
     ]
+    has_profile_context = any(w in text for w in profile_words)
+    has_menu_token = any(w in text for w in ["hamburger", "меню", "menu", "☰", "≡"])
+    has_header_context = any(w in text for w in ["header", "navigation", "шапк", "навигац"])
     action_words = ["open", "click", "reveal", "show", "find", "открой", "нажми", "покажи"]
-    return any(w in text for w in trigger_words) and any(a in text for a in action_words)
+    has_action = any(a in text for a in action_words)
+
+    # Strictly require account/profile intent, or menu+header intent.
+    return has_action and (has_profile_context or (has_menu_token and has_header_context))
+
+
+def _extract_quoted_text_options(instruction: str) -> list[str]:
+    """Extract quoted text options from instruction (supports '...' and \"...\")."""
+    single = re.findall(r"'([^'\\n]{2,120})'", instruction)
+    double = re.findall(r'"([^"\\n]{2,120})"', instruction)
+    options = [*(single or []), *(double or [])]
+    # preserve order, unique
+    seen: set[str] = set()
+    out: list[str] = []
+    for opt in options:
+        key = opt.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(opt.strip())
+    return out
+
+
+def _instruction_prefers_click_by_text(instruction: str, quoted_options: list[str]) -> bool:
+    """Decide whether to use deterministic click_by_text instead of index click."""
+    if not quoted_options:
+        return False
+    text = instruction.lower()
+    has_action = any(w in text for w in ["click", "open", "наж", "открой"])
+    has_target = any(w in text for w in ["text", "card", "button", "link", "ресторан", "карточ", "кноп", "ссыл", "текст"])
+    return has_action and has_target
 
 
 def _inject_snapshot_xpath(tool_name: str, tool_params: dict[str, Any], elements: list[Any]) -> dict[str, Any]:
@@ -288,6 +316,22 @@ class NavigatorAgent(BaseAgent):
 
         # Deterministic UI-grounding override: for header/profile menu tasks,
         # prefer robust selector-based helper over brittle index clicks.
+        quoted_options = _extract_quoted_text_options(instruction)
+        if _instruction_prefers_click_by_text(instruction, quoted_options) and tool_name in {
+            "click_element",
+            "search_page_text",
+            "find_elements_by_selector",
+            "open_navigation_menu",
+        }:
+            logger.info(
+                "navigator: override tool to click_by_text",
+                original_tool=tool_name,
+                options=quoted_options[:3],
+                instruction=instruction[:80],
+            )
+            tool_name = "click_by_text"
+            tool_params = {"text_options": quoted_options}
+
         if _instruction_requires_nav_menu(instruction) and tool_name in {
             "click_element",
             "find_elements_by_selector",

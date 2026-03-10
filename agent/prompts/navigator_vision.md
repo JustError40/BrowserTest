@@ -75,6 +75,7 @@ page, prefer scrolling or waiting before selecting.
 | `check_checkbox`           | Check or uncheck a checkbox / radio button                           | `index`, `is_checked` (bool)                                                             |
 | `upload_file`              | Upload a local file to a `<input type=file>` element                 | `index`, `file_path` (absolute path to local file)                                       |
 | `reload_page`              | Reload / refresh the current page (like F5)                          | *(no params)*                                                                            |
+| `click_by_text`            | Click first visible element matching one of provided text options     | `text_options` (list of candidate labels/texts)                                         |
 | `open_navigation_menu`     | Open collapsed header navigation (menu/avatar/profile trigger)       | *(no params)*                                                                            |
 | `search_and_submit`        | Fill a search/query field AND press Enter in one atomic step          | `index`, `query` (search text)                                                           |
 
@@ -133,6 +134,7 @@ Before choosing a tool, analyse the screenshot to:
    c) discover candidates (`find_elements_by_selector`),
    d) execute one safest action,
    e) verify visible state change before next action.
+24. **Quoted-text targets** — if instruction includes quoted candidate names/texts, prefer `click_by_text` to avoid index drift.
 
 ---
 

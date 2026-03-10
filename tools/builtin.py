@@ -6,7 +6,7 @@ Import this module to register all standard browser actions:
     search_page_text, find_elements_by_selector,
     get_page_state, done, wait,
     select_option, hover, check_checkbox, upload_file, reload_page,
-    open_navigation_menu, search_and_submit
+    click_by_text, open_navigation_menu, search_and_submit
 """
 
 import asyncio
@@ -978,7 +978,82 @@ async def reload_page(browser_session: BrowserSession) -> ActionResult:
 
 
 # ---------------------------------------------------------------------------
-# 19. open_navigation_menu
+# 19. click_by_text
+# ---------------------------------------------------------------------------
+
+
+@registry.action(
+    description=(
+        "Click the first visible clickable element whose text contains one of the provided options. "
+        "Use for instructions like: click card/button/link with text 'A' or 'B' or 'C'. "
+        "Avoids brittle index guessing when DOM re-renders frequently."
+    )
+)
+async def click_by_text(
+    text_options: list[str],
+    browser_session: BrowserSession,
+) -> ActionResult:
+    """Click by visible text match with robust selector fallback."""
+    try:
+        if not text_options:
+            return ActionResult.fail(error="click_by_text requires non-empty text_options")
+
+        page = browser_session.get_current_page()
+        cleaned = [t.strip() for t in text_options if t and t.strip()]
+        if not cleaned:
+            return ActionResult.fail(error="click_by_text text_options are empty after normalization")
+
+        matched_text: str | None = await page.evaluate(
+            """(options) => {
+                const sels = [
+                    'a',
+                    'button',
+                    '[role="button"]',
+                    '[role="link"]',
+                    '[data-qa*="card" i]',
+                    '[class*="card" i]',
+                    'article',
+                    'li',
+                ];
+                const candidates = Array.from(document.querySelectorAll(sels.join(',')));
+                const norm = (s) => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                const opts = options.map(norm).filter(Boolean);
+
+                for (const el of candidates) {
+                    const style = window.getComputedStyle(el);
+                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+                    const rect = el.getBoundingClientRect();
+                    if (rect.width < 4 || rect.height < 4) continue;
+
+                    const txt = norm(el.innerText || el.textContent || el.getAttribute('aria-label') || '');
+                    if (!txt) continue;
+
+                    const hit = opts.find(o => txt.includes(o));
+                    if (!hit) continue;
+
+                    let target = el.closest('a,button,[role="button"],[role="link"]') || el;
+                    target.scrollIntoView({block: 'center', inline: 'center'});
+                    target.click();
+                    return hit;
+                }
+                return null;
+            }""",
+            cleaned,
+        )
+
+        if not matched_text:
+            return ActionResult.fail(error=f"No visible clickable element found for any of: {cleaned}")
+
+        await asyncio.sleep(0.6)
+        summary = await _page_summary(page)
+        return ActionResult.ok(content=f"Clicked element by text match '{matched_text}'. {summary}")
+    except Exception as exc:
+        logger.warning("click_by_text failed", error=str(exc))
+        return ActionResult.fail(error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# 20. open_navigation_menu
 # ---------------------------------------------------------------------------
 
 
