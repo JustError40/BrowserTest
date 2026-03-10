@@ -39,6 +39,21 @@ async def _page_summary(page) -> str:
         return ""
 
 
+def _resolve_target_by_index(elements: list, index: int):
+    """Resolve 0-based or 1-based index against the parsed elements list."""
+    if 0 <= index < len(elements):
+        return elements[index]
+    if 1 <= index <= len(elements):
+        return elements[index - 1]
+    return None
+
+
+def _effective_xpath(snapshot_xpath: str, target_xpath: str) -> str:
+    """Prefer snapshot-linked xpath (from navigator) over fresh parse xpath."""
+    sx = (snapshot_xpath or "").strip()
+    return sx or (target_xpath or "")
+
+
 # ---------------------------------------------------------------------------
 # 1. navigate_to
 # ---------------------------------------------------------------------------
@@ -101,29 +116,29 @@ async def go_back(browser_session: BrowserSession) -> ActionResult:
         "After clicking, the result includes the new page URL and title so you know what changed."
     )
 )
-async def click_element(index: int, browser_session: BrowserSession) -> ActionResult:
+async def click_element(
+    index: int,
+    browser_session: BrowserSession,
+    snapshot_xpath: str = "",
+) -> ActionResult:
     """Click the element with the given index from get_interactive_elements()."""
     try:
         page = browser_session.get_current_page()
         elements = await _dom_service.get_interactive_elements(page)
 
-        target = None
-        if 0 <= index < len(elements):
-            target = elements[index]
-        elif 1 <= index <= len(elements):
-            target = elements[index - 1]
-
-        if target is None:
+        target = _resolve_target_by_index(elements, index)
+        if target is None and not snapshot_xpath.strip():
             return ActionResult.fail(
                 error=f"Element index {index} not found. Page has {len(elements)} interactive elements."
             )
 
-        elem_label = (target.text or "")[:60]
+        elem_label = (target.text or "")[:60] if target else "snapshot target"
+        action_xpath = _effective_xpath(snapshot_xpath, target.xpath if target else "")
 
         # Strategy 1: XPath locator — handles scroll-into-view, overlays, shadow DOM
-        if target.xpath:
+        if action_xpath:
             try:
-                locator = page.locator(f"xpath={target.xpath}")
+                locator = page.locator(f"xpath={action_xpath}")
                 await locator.scroll_into_view_if_needed(timeout=5_000)
                 await locator.click(timeout=8_000)
                 await asyncio.sleep(0.4)
@@ -134,7 +149,7 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
                 pass  # fall through
 
         # Strategy 2: coordinate mouse click
-        bb = target.bounding_box
+        bb = target.bounding_box if target else None
         if bb:
             try:
                 x = bb.x + bb.width / 2
@@ -150,7 +165,7 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
         # Strategy 3: JS element.click() — bypasses Playwright pointer-events
         # interception layer, works on React portals and detached overlays.
         # Modelled after browser-use's final JS fallback.
-        if target.xpath:
+        if action_xpath:
             try:
                 await page.evaluate(
                     """(xp) => {
@@ -161,7 +176,7 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
                             el.click();
                         }
                     }""",
-                    target.xpath,
+                    action_xpath,
                 )
                 await asyncio.sleep(0.4)
                 summary = await _page_summary(page)
@@ -172,9 +187,9 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
 
         # Strategy 4: Playwright dispatch_event — fires a real MouseEvent that
         # bypasses actionability checks (pointer-events: none, hidden, etc.).
-        if target.xpath:
+        if action_xpath:
             try:
-                locator = page.locator(f"xpath={target.xpath}")
+                locator = page.locator(f"xpath={action_xpath}")
                 await locator.dispatch_event("click", timeout=8_000)
                 await asyncio.sleep(0.4)
                 summary = await _page_summary(page)
@@ -210,7 +225,12 @@ async def click_element(index: int, browser_session: BrowserSession) -> ActionRe
         "Works with React / SPA controlled inputs (hh.ru, etc.)."
     )
 )
-async def input_text(index: int, text: str, browser_session: BrowserSession) -> ActionResult:
+async def input_text(
+    index: int,
+    text: str,
+    browser_session: BrowserSession,
+    snapshot_xpath: str = "",
+) -> ActionResult:
     """Clear and type text into the element at the given index.
 
     Strategy priority (most reliable first):
@@ -221,20 +241,17 @@ async def input_text(index: int, text: str, browser_session: BrowserSession) -> 
         page = browser_session.get_current_page()
         elements = await _dom_service.get_interactive_elements(page)
 
-        target = None
-        if 0 <= index < len(elements):
-            target = elements[index]
-        elif 1 <= index <= len(elements):
-            target = elements[index - 1]
-
-        if target is None:
+        target = _resolve_target_by_index(elements, index)
+        if target is None and not snapshot_xpath.strip():
             return ActionResult.fail(error=f"Element index {index} not found.")
+
+        action_xpath = _effective_xpath(snapshot_xpath, target.xpath if target else "")
 
         # ── Strategy 1: XPath locator.fill() ────────────────────────────────
         # Playwright fill() dispatches focus→input→change events that React expects.
-        if target.xpath:
+        if action_xpath:
             try:
-                locator = page.locator(f"xpath={target.xpath}")
+                locator = page.locator(f"xpath={action_xpath}")
                 await locator.scroll_into_view_if_needed(timeout=5_000)
                 await locator.click(timeout=5_000)   # focus first
                 await asyncio.sleep(0.15)
@@ -245,7 +262,7 @@ async def input_text(index: int, text: str, browser_session: BrowserSession) -> 
                 logger.debug("locator.fill failed, trying fallback", error=str(fill_exc))
 
         # ── Strategy 2: coordinate click + triple-click + keyboard.type() ───
-        bb = target.bounding_box
+        bb = target.bounding_box if target else None
         if bb:
             x = bb.x + bb.width / 2
             y = bb.y + bb.height / 2
@@ -256,16 +273,16 @@ async def input_text(index: int, text: str, browser_session: BrowserSession) -> 
             await asyncio.sleep(0.1)
         else:
             # No bounding box — try JS focus fallback
-            if target.xpath:
+            if action_xpath:
                 await page.evaluate(
                     "(xp) => { const el = document.evaluate(xp, document, null, "
                     "XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; "
                     "if(el){ el.focus(); el.select && el.select(); } }",
-                    target.xpath,
+                    action_xpath,
                 )
 
         # Dispatch native input event so React/Vue picks up the value
-        if target.xpath:
+        if action_xpath:
             await page.evaluate(
                 """([xp, val]) => {
                     const el = document.evaluate(xp, document, null,
@@ -279,7 +296,7 @@ async def input_text(index: int, text: str, browser_session: BrowserSession) -> 
                     el.dispatchEvent(new Event('input', { bubbles: true }));
                     el.dispatchEvent(new Event('change', { bubbles: true }));
                 }""",
-                [target.xpath, text],
+                [action_xpath, text],
             )
             logger.debug("input_text via native-setter dispatch", index=index, text=text[:40])
             return ActionResult.ok(content=f"Typed '{text}' into element {index}")
@@ -694,24 +711,21 @@ async def wait(
 # ---------------------------------------------------------------------------
 
 
-async def _get_element_locator(index: int, page, elements):
+async def _get_element_locator(index: int, page, elements, snapshot_xpath: str = ""):
     """Return a Playwright Locator for the element at *index*.
 
     Tries the element's stored XPath first.  Returns (locator_or_None, elem).
     Caller must handle `locator is None` by falling back to coordinate action.
     Raises ValueError if the index is out of range.
     """
-    target = None
-    if 0 <= index < len(elements):
-        target = elements[index]
-    elif 1 <= index <= len(elements):
-        target = elements[index - 1]
+    target = _resolve_target_by_index(elements, index)
+    effective_xpath = _effective_xpath(snapshot_xpath, target.xpath if target else "")
 
-    if target is None:
+    if target is None and not effective_xpath:
         raise ValueError(f"Element index {index} not found. Page has {len(elements)} interactive elements.")
 
-    locator = page.locator(f"xpath={target.xpath}") if target.xpath else None
-    return locator, target
+    locator = page.locator(f"xpath={effective_xpath}") if effective_xpath else None
+    return locator, target, effective_xpath
 
 
 # ---------------------------------------------------------------------------
@@ -734,12 +748,13 @@ async def select_option(
     label: str = "",
     value: str = "",
     option_index: int = -1,
+    snapshot_xpath: str = "",
 ) -> ActionResult:
     """Select a dropdown option by label, value, or index (Skyvern SelectOptionAction pattern)."""
     try:
         page = browser_session.get_current_page()
         elements = await _dom_service.get_interactive_elements(page)
-        locator, target = await _get_element_locator(index, page, elements)
+        locator, target, effective_xpath = await _get_element_locator(index, page, elements, snapshot_xpath)
 
         if locator is None:
             return ActionResult.fail(error=f"Cannot build locator for element {index} (no XPath).")
@@ -783,7 +798,7 @@ async def select_option(
                     if (opt) { sel.value = opt.value; sel.dispatchEvent(new Event('change', {bubbles:true})); return opt.text; }
                     return null;
                 }""",
-                [target.xpath, label],
+                [effective_xpath, label],
             )
             if matched:
                 chosen = f"partial match='{matched}'"
@@ -820,17 +835,18 @@ async def hover(
     index: int,
     browser_session: BrowserSession,
     hold_seconds: float = 0.0,
+    snapshot_xpath: str = "",
 ) -> ActionResult:
     """Hover over the element at `index` (Skyvern HoverAction pattern)."""
     try:
         page = browser_session.get_current_page()
         elements = await _dom_service.get_interactive_elements(page)
-        locator, target = await _get_element_locator(index, page, elements)
+        locator, target, _ = await _get_element_locator(index, page, elements, snapshot_xpath)
 
         if locator is not None:
             await locator.scroll_into_view_if_needed(timeout=5_000)
             await locator.hover(timeout=8_000)
-        elif target.bounding_box:
+        elif target and target.bounding_box:
             bb = target.bounding_box
             await page.mouse.move(bb.x + bb.width / 2, bb.y + bb.height / 2)
         else:
@@ -839,7 +855,7 @@ async def hover(
         if hold_seconds > 0:
             await asyncio.sleep(hold_seconds)
 
-        elem_label = (target.text or "")[:60]
+        elem_label = (target.text or "")[:60] if target else "snapshot target"
         logger.debug("hover", index=index, text=elem_label)
         return ActionResult.ok(content=f"Hovered over element {index} ({elem_label})")
     except Exception as exc:
@@ -865,12 +881,13 @@ async def check_checkbox(
     index: int,
     is_checked: bool,
     browser_session: BrowserSession,
+    snapshot_xpath: str = "",
 ) -> ActionResult:
     """Check or uncheck a checkbox element (Skyvern CheckboxAction pattern)."""
     try:
         page = browser_session.get_current_page()
         elements = await _dom_service.get_interactive_elements(page)
-        locator, target = await _get_element_locator(index, page, elements)
+        locator, target, _ = await _get_element_locator(index, page, elements, snapshot_xpath)
 
         if locator is None:
             return ActionResult.fail(error=f"Cannot build locator for element {index} (no XPath).")
@@ -884,7 +901,7 @@ async def check_checkbox(
             await locator.uncheck(timeout=8_000)
             state = "unchecked"
 
-        elem_label = (target.text or "")[:60]
+        elem_label = (target.text or "")[:60] if target else "snapshot target"
         logger.debug("check_checkbox", index=index, is_checked=is_checked)
         return ActionResult.ok(content=f"Element {index} ({elem_label}) is now {state}")
     except Exception as exc:
@@ -909,6 +926,7 @@ async def upload_file(
     index: int,
     file_path: str,
     browser_session: BrowserSession,
+    snapshot_xpath: str = "",
 ) -> ActionResult:
     """Upload a file to the file input at `index` (Skyvern UploadFileAction pattern)."""
     try:
@@ -917,7 +935,7 @@ async def upload_file(
 
         page = browser_session.get_current_page()
         elements = await _dom_service.get_interactive_elements(page)
-        locator, target = await _get_element_locator(index, page, elements)
+        locator, target, _ = await _get_element_locator(index, page, elements, snapshot_xpath)
 
         if locator is None:
             return ActionResult.fail(error=f"Cannot build locator for element {index} (no XPath).")
@@ -1045,26 +1063,24 @@ async def search_and_submit(
     index: int,
     query: str,
     browser_session: BrowserSession,
+    snapshot_xpath: str = "",
 ) -> ActionResult:
     """Fill a search field and press Enter — atomic, survives autocomplete DOM mutations."""
     try:
         page = browser_session.get_current_page()
         elements = await _dom_service.get_interactive_elements(page)
 
-        target = None
-        if 0 <= index < len(elements):
-            target = elements[index]
-        elif 1 <= index <= len(elements):
-            target = elements[index - 1]
-
-        if target is None:
+        target = _resolve_target_by_index(elements, index)
+        if target is None and not snapshot_xpath.strip():
             return ActionResult.fail(error=f"Element index {index} not found.")
+
+        action_xpath = _effective_xpath(snapshot_xpath, target.xpath if target else "")
 
         # Step 1 — fill the field (same waterfall as input_text) ────────────
         filled = False
-        if target.xpath:
+        if action_xpath:
             try:
-                locator = page.locator(f"xpath={target.xpath}")
+                locator = page.locator(f"xpath={action_xpath}")
                 await locator.scroll_into_view_if_needed(timeout=5_000)
                 await locator.click(timeout=5_000)
                 await asyncio.sleep(0.15)
@@ -1075,7 +1091,7 @@ async def search_and_submit(
                 logger.debug("search_and_submit fill fallback", error=str(exc))
 
         if not filled:
-            bb = target.bounding_box
+            bb = target.bounding_box if target else None
             if bb:
                 x = bb.x + bb.width / 2
                 y = bb.y + bb.height / 2
@@ -1083,7 +1099,7 @@ async def search_and_submit(
                 await asyncio.sleep(0.15)
                 await page.mouse.click(x, y, click_count=3)
                 await asyncio.sleep(0.1)
-            if target.xpath:
+            if action_xpath:
                 await page.evaluate(
                     """([xp, val]) => {
                         const el = document.evaluate(xp, document, null,
@@ -1097,7 +1113,7 @@ async def search_and_submit(
                         el.dispatchEvent(new Event('input', { bubbles: true }));
                         el.dispatchEvent(new Event('change', { bubbles: true }));
                     }""",
-                    [target.xpath, query],
+                    [action_xpath, query],
                 )
                 logger.debug("search_and_submit fill via native setter", index=index)
             else:

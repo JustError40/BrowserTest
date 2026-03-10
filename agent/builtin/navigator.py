@@ -81,6 +81,44 @@ def _instruction_requires_nav_menu(instruction: str) -> bool:
     action_words = ["open", "click", "reveal", "show", "find", "открой", "нажми", "покажи"]
     return any(w in text for w in trigger_words) and any(a in text for a in action_words)
 
+
+def _inject_snapshot_xpath(tool_name: str, tool_params: dict[str, Any], elements: list[Any]) -> dict[str, Any]:
+    """Attach snapshot_xpath for index-based actions.
+
+    This keeps tool execution anchored to the exact DOM snapshot used by the
+    LLM decision (visual+parser sync), reducing index drift after dynamic
+    re-rendering.
+    """
+    index_tools = {
+        "click_element",
+        "input_text",
+        "select_option",
+        "hover",
+        "check_checkbox",
+        "upload_file",
+        "search_and_submit",
+    }
+    if tool_name not in index_tools:
+        return tool_params
+    if "snapshot_xpath" in tool_params:
+        return tool_params
+
+    idx = tool_params.get("index")
+    if not isinstance(idx, int):
+        return tool_params
+
+    target = None
+    if 0 <= idx < len(elements):
+        target = elements[idx]
+    elif 1 <= idx <= len(elements):
+        target = elements[idx - 1]
+
+    if target and getattr(target, "xpath", ""):
+        merged = dict(tool_params)
+        merged["snapshot_xpath"] = target.xpath
+        return merged
+    return tool_params
+
 # ---------------------------------------------------------------------------
 # Result model
 # ---------------------------------------------------------------------------
@@ -262,6 +300,8 @@ class NavigatorAgent(BaseAgent):
             )
             tool_name = "open_navigation_menu"
             tool_params = {}
+
+        tool_params = _inject_snapshot_xpath(tool_name, tool_params, elements)
 
         logger.info(
             "navigator: executing tool",

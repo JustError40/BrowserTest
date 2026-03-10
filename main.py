@@ -98,7 +98,7 @@ async def run_task(
     *,
     headless: bool = True,
     max_steps: int = 20,
-    vision: bool = False,
+    vision: bool = True,
     cdp_url: str = "",
     auto_attach: bool = False,
 ) -> int:
@@ -223,7 +223,7 @@ def cli(
     task: str = typer.Argument(default="", help="Task to execute"),
     headless: bool = typer.Option(False, "--headless/--no-headless", help="Run a new browser headless (ignored in CDP mode)"),
     max_steps: int = typer.Option(20, "--max-steps", help="Maximum executor steps"),
-    vision: bool = typer.Option(False, "--vision", help="Enable screenshot vision"),
+    vision: bool = typer.Option(True, "--vision/--no-vision", help="Enable screenshot vision"),
     cdp_url: str = typer.Option(
         "",
         "--cdp-url",

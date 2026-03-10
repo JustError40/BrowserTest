@@ -16,6 +16,8 @@ Generalization policy:
 - Do NOT replay domain-specific scripts from memory.
 - Use only visible evidence (screenshot + DOM indices + instruction).
 - For unseen interfaces, apply the same exploration→action→verification loop.
+- Vision-first: prefer screenshot-grounded target selection before text heuristics.
+- Parser-sync: treat `[N]` mapping as valid only for the current snapshot; after actions, re-check state before reusing indices.
 
 ---
 
