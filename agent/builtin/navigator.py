@@ -20,6 +20,7 @@ from agent.views import AgentSettings, StepResult
 from browser.dom import DomService
 from browser.session import BrowserSession
 from tools.registry import registry
+from vision.screenshot import ScreenshotService
 
 logger = structlog.get_logger(__name__)
 
@@ -32,6 +33,7 @@ _SYSTEM_PROMPT_VISION: str = (
 )
 
 _dom_service = DomService(viewport_expansion=500)
+_screenshot_service = ScreenshotService(session_id="navigator")
 
 
 def _get_tool_schema_hint() -> str:
@@ -138,23 +140,47 @@ class NavigatorAgent(BaseAgent):
         # 1. Observe current browser state --------------------------------
         page = session.get_current_page()
         current_url = page.url
+        page_title: str = ""
+        try:
+            page_title = await page.title()
+        except Exception:
+            pass
 
         elements = await _dom_service.get_interactive_elements(page)
         dom_text = _dom_service.format_for_llm(elements)
 
-        # 2. Optionally capture screenshot --------------------------------
+        # 2. Capture SoM-annotated screenshot when vision is enabled ------
+        # SoM = Set-of-Marks: numbered coloured badges injected into the
+        # live DOM (Skyvern-style) so the LLM can visually identify elements
+        # by the same [N] indices shown in the DOM text below.
         screenshot_bytes: bytes | None = None
         if self.settings.vision_enabled:
             try:
-                screenshot_bytes = await page.screenshot(type="jpeg", quality=60)
+                screenshot_bytes = await _screenshot_service.capture_som(page, elements)
             except Exception as exc:
-                logger.debug("screenshot failed", error=str(exc))
+                logger.warning("som_screenshot_failed", error=str(exc))
+                try:
+                    screenshot_bytes = await page.screenshot(type="jpeg", quality=70)
+                except Exception as exc2:
+                    logger.debug("plain_screenshot_failed", error=str(exc2))
 
         # 3. Build LLM prompt ---------------------------------------------
+        page_info = f"Title: {page_title}\nURL: {current_url}"
+        elem_count = len(elements)
+        dom_section = (
+            f"Interactive elements ({elem_count} total):\n"
+            f"{dom_text or '(none detected)'}"
+        )
+        vision_note = (
+            "\n[VISION] The screenshot has coloured numbered badges matching the "
+            "element indices above. Blue=link, Green=button, Amber=input/select."
+            if screenshot_bytes
+            else ""
+        )
         user_content = (
-            f"Current URL: {current_url}\n\n"
+            f"{page_info}\n\n"
             f"{_get_tool_schema_hint()}\n\n"
-            f"DOM interactive elements:\n{dom_text or '(no interactive elements)'}\n\n"
+            f"{dom_section}{vision_note}\n\n"
             f"Instruction: {instruction}\n\n"
             "Respond with JSON: {\"tool\": \"<name>\", \"params\": {...}}"
         )
